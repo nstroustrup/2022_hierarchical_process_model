@@ -1,0 +1,795 @@
+```{r}
+library(rms)
+library(bshazard)
+library(devtools)
+if (!("ns.survival.code" %in% rownames(installed.packages())))
+  install_github("nstroustrup/ns.survival.code");
+library(ns.survival.code)
+source("../shared_scripts/ns_multistate_basics.r")
+source("../shared_scripts/plot_fit_diagnostics.r")
+library("quantreg")
+library("MASS")
+
+```
+
+
+```{r}
+#load all the movement and lifespan data
+#At this stage of the analysis, we now trust the HMM model and so
+#we analyze the combindation of by-hand-annotated and HMM-derived movement and lifespan data.
+spans = read.csv("../data/all_spans.csv.gz");
+```
+
+```{r}
+#Plot the hazard functions for wild-type populations at 20 and 25C
+
+for (j in 1:2){
+  if(j==2)pdf("wildtype_20_25C_hazard.pdf",width=7,height=7)
+spans2 = spans[spans$Experiment == "four_temp_scaling",]
+	layout(matrix(1:9,nrow=3))
+
+	#calculate device-corrected event times
+	spans2$slow_adj = 0;
+	spans2$expansion_adj = 0;
+	for (g in unique(spans2$group)){
+		sp = spans2[spans2$group==g,]
+		res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$Plate.Name)
+		spans2$expansion_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+	}
+	#ns_plot_colored_hazard_by_groups(spans2,"group",km_spline_lambda=5);
+	for (g in unique(spans2$group)){
+		sp = spans2[spans2$group==g,]
+		res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$Plate.Name)
+		spans2$slow_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+	}
+
+
+	sp_v = spans2;
+	sp_v$event = "vigorous movement"
+	sp_v$Age.at.Death..d..Raw = spans2$slow_age
+	sp_e = spans2;
+	sp_e$event = "death"
+	sp_e$Age.at.Death..d..Raw = spans2$expansion
+	sp_m = spans2;
+	sp_m$event = "movement cessation"
+	sp_m$Age.at.Death..d..Raw = spans2$movement_cessation
+		#plot hazard curves for vigorous movement cession, movement cessation, and death 
+	#on the same plot for wildtype animals at 25.
+	colors = c("black","red","purple")
+	sp = rbind(sp_v,sp_e,sp_m)
+	g = "wildtype UV-inactivated 25" 
+	layout(matrix(1:9,nrow=3))
+	ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+		km_spline_knots=30,
+		km_spline_lambda=12,
+		xlim=c(8,29),ylim=10^c(-1.5,.2),
+		khaz_min_dt=2,khaz_number_of_steps=NA,
+		x_axis_tick=seq(4,25,2),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),
+		colors = colors,logx=F
+		);
+	title(paste(g,"N=",sum(sp$group==g)))
+
+	#plot hazard curves for vigorous movement cession, movement cessation, and death 
+	#on the same plot for wildtype animals at 20.
+	g = "wildtype UV-inactivated 20"
+	ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+		km_spline_knots=10,
+		km_spline_lambda=2,
+		xlim=c(8,29),ylim=10^c(-1.5,.2),
+		khaz_min_dt=4,khaz_number_of_steps=NA,x_axis_tick=seq(4,30,2),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),
+		colors = colors,logx=F);
+	title(paste(g,"N=",sum(sp$group==g)))
+
+
+#compare vigorous movement cession hazard curves between 20 and 25
+
+colors = c("blue","red")
+ns_plot_colored_hazard_by_groups(sp_v,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(6,30),ylim=10^c(-1.5,.2),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,x_axis_tick=seq(4,30,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),colors=colors);
+title(paste("Vigorous","N=",sum(sp$group==g)))
+
+#compare  movement cession hazard curves between 20 and 25
+ns_plot_colored_hazard_by_groups(sp_m,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(6,30),ylim=10^c(-1.5,.2),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,x_axis_tick=seq(.01,30,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),colors=colors);
+title(paste("Movement","N=",sum(sp$group==g)))
+
+#compare death hazard curves between 20 and 25C
+ns_plot_colored_hazard_by_groups(sp_e,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(6,30),ylim=10^c(-1.5,.2),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,x_axis_tick=seq(4,30,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),colors=colors);
+title(paste("Death","N=",sum(sp$group==g)))
+
+#compare clock-reset hazard curves for the period between vigorous movement and death for 20 and 25C
+sp_v = spans2;
+	sp_v$event = "vigorous movement"
+	sp_v$Age.at.Death..d..Raw = spans2$expansion - spans2$slow_age;
+	is_zero = sp_v$Age.at.Death..d..Raw <= .1;
+sp_v$Age.at.Death..d..Raw[is_zero] = runif(sum(is_zero),.1,.11)
+ns_plot_colored_hazard_by_groups(sp_v,"group",
+	km_spline_knots=10,
+	km_spline_lambda=4,
+	plot_percentile_limits=c(.025,.95),
+	xlim=c(.5,12),ylim=10^c(-1.5,.2),
+	khaz_min_dt=1,khaz_number_of_steps=NA,logx=F,x_axis_tick=c(.25,seq(1,12,1)),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1),colors=colors,xlabel="Time after vigorous movement cessation (days)",ylabel="Death hazard");
+title(paste("Clock Reset","N=",sum(sp$group==g)))
+
+#compare clock-reset hazard curves for the period between vigorous movement cessation and movement for  20 and 25C
+sp_m = spans2;
+sp_m$event = "movement cessation"
+sp_m$Age.at.Death..d..Raw = spans2$movement_cessation - spans2$slow_age;
+ns_plot_colored_hazard_by_groups(sp_m,"group",
+	km_spline_knots=10,
+	km_spline_lambda=3,
+	xlim=c(.5,10),ylim=10^c(-1,log10(1.5)),
+	khaz_min_dt=2,khaz_number_of_steps=NA,logx=F,x_axis_tick=seq(0,10,1),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5),colors=colors,xlabel="Time after vigorous movement cessation (days)",ylabel="Ceasing movement Hazard");
+title(paste("Clock Reset","N=",sum(sp$group==g)))
+
+#compare clock-reset hazard curves for the period between movement cessation and death for  20 and 25C
+sp_e = spans2;
+sp_e$event = "death"
+sp_e$Age.at.Death..d..Raw = spans2$expansion - spans2$movement_cessation;is_zero = sp_e$Age.at.Death..d..Raw <= .1;
+sp_e$Age.at.Death..d..Raw[is_zero] = runif(sum(is_zero),.1,.11)
+ns_plot_colored_hazard_by_groups(sp_e,"group",
+	km_spline_knots=60,
+	km_spline_lambda=120,
+	xlim=c(.1,5),ylim=10^c(log10(.25),1),
+	khaz_number_of_steps=NA,khaz_min_dt=.1,logx=F,
+	x_axis_tick=c(.1,seq(.5,4,.5)),
+	y_axis_tick=c(.25,.5,.75,1,2.5,5),
+	plot_percentile_limits=c(0,.95),colors=colors,xlabel="Time after movement cessation (days)",ylabel="Death Hazard");
+title(paste("Clock Reset","N=",sum(sp$group==g)))
+if(j==2) dev.off();
+}
+
+```
+```{r}
+#Plot the hazard functions for daf-2(e1368) (QZ120) populations
+spans2 = spans[spans$Experiment == "daf2_age1_25C",]
+
+for (j in 1:2){
+  if(j==2)pdf("daf2_hazard.pdf",width=7,height=7)
+		spans2$control = 0;
+		spans2$control[spans2$group=="wildtype live 25"] = 1;
+
+		layout(matrix(1:9,nrow=3))
+
+		spans2$slow_adj = 0;
+		spans2$expansion_adj = 0;
+		for (g in unique(spans2$group)){
+			sp = spans2[spans2$group==g,]
+			res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$Plate.Name)
+			spans2$expansion_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+		}
+	
+		for (g in unique(spans2$group)){
+			sp = spans2[spans2$group==g,]
+			sp$slow_age[sp$slow_age <= 0] = min(sp$slow_age[sp$slow_age > 0])
+			res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$Plate.Name)
+			spans2$slow_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+		}
+
+		sp_v = spans2;
+		sp_v$event = "vigorous movement"
+		sp_v$Age.at.Death..d..Raw = spans2$slow_age
+		sp_e = spans2;
+		sp_e$event = "death"
+		sp_e$Age.at.Death..d..Raw = spans2$expansion
+		sp_m = spans2;
+		sp_m$event = "movement cessation"
+		sp_m$Age.at.Death..d..Raw = spans2$movement_cessation
+    #plot wild-type hazard curves for each event
+		colors = c("black","red","purple")
+		sp = rbind(sp_v,sp_e,sp_m)
+		g = "wildtype live 25" 
+		layout(matrix(1:9,nrow=3))
+		ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+			km_spline_knots=30,
+			km_spline_lambda=12,
+			xlim=c(1,18),ylim=c(.01,5),
+			khaz_min_dt=2,khaz_number_of_steps=NA,
+			x_axis_tick=seq(0,18,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+			colors = colors
+			);
+		title(paste(g,"N=",sum(sp$group==g)))
+		
+   #plot daf-2 hazard curves for each event
+		g = "QZ120"
+		ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+			km_spline_knots=10,
+			km_spline_lambda=2,
+			xlim=c(1,18),ylim=c(.01,5),
+			khaz_min_dt=4,khaz_number_of_steps=NA,
+			x_axis_tick=seq(0,18,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+			colors = colors);
+		title(paste(g,"N=",sum(sp$group==g)))
+
+		plot(c(),c(),type="n",xlim=c(0,1),ylim=c(0,1))
+    #compare vigorous movement spans
+		colors = c("blue","red")
+		ns_plot_colored_hazard_by_groups(sp_v,"group",
+			km_spline_knots=10,
+			km_spline_lambda=2,
+			xlim=c(1,18),ylim=c(.01,5),
+			khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,
+			x_axis_tick=seq(0,18,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),colors=colors);
+		title("Vigorous")
+		
+		 #compare weak movement spans
+		ns_plot_colored_hazard_by_groups(sp_m,"group",
+			km_spline_knots=10,
+			km_spline_lambda=2,
+			xlim=c(1,18),ylim=c(.01,5),
+			khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,
+			x_axis_tick=seq(0,18,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),,colors=colors);
+		title("weak")
+		
+   #compare death spans
+		ns_plot_colored_hazard_by_groups(sp_e,"group",
+			km_spline_knots=10,
+			km_spline_lambda=2,
+			xlim=c(1,18),ylim=c(.01,5),
+			khaz_min_dt=3,khaz_number_of_steps=NA,logx=F,
+			x_axis_tick=seq(0,18,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),,colors=colors);
+		title("Death")
+
+	
+
+	sp_v = spans2;
+	sp_v$event = "vigorous movement"
+	sp_v$Age.at.Death..d..Raw = spans2$expansion -spans2$slow_age;
+	sp_e = spans2;
+	sp_e$event = "death"
+	sp_e$Age.at.Death..d..Raw = spans2$expansion - spans2$movement_cessation;
+	is_zero = sp_e$Age.at.Death..d..Raw <= .1;
+	sp_e$Age.at.Death..d..Raw[is_zero] = runif(sum(is_zero),.1,.11)
+
+	sp_m = spans2;
+	sp_m$event = "movement cessation"
+	sp_m$Age.at.Death..d..Raw = spans2$movement_cessation - spans2$slow_age;
+
+
+	ns_plot_colored_hazard_by_groups(sp_v,"group",
+		km_spline_knots=10,
+		km_spline_lambda=4,
+		xlim=c(.5,7),ylim=c(.1,2),
+		logx=F,		
+		khaz_min_dt=1.5,khaz_number_of_steps=NA,
+		x_axis_tick=c(.5,1,seq(1,8,1)),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2),
+		colors=colors);
+	title("Vigorous")
+
+	ns_plot_colored_hazard_by_groups(sp_m,"group",
+		km_spline_knots=15,
+		km_spline_lambda=3,
+		xlim=c(.5,10),ylim=10^c(-1,log10(1.5)),
+		khaz_min_dt=1,khaz_number_of_steps=NA,logx=F,x_axis_tick=seq(0,10,1),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5),colors=colors);
+	title("Weak")
+	
+
+	ns_plot_colored_hazard_by_groups(sp_e,"group",
+		km_spline_knots=60,
+		km_spline_lambda=120,
+		xlim=c(.1,5),ylim=10^c(log10(.25),1),
+		khaz_number_of_steps=NA,khaz_min_dt=.1,logx=F,
+		x_axis_tick=c(.1,seq(.5,4,.5)),
+		y_axis_tick=c(.25,.5,.75,1,2.5,5),
+		plot_percentile_limits=c(0,.95),colors=colors);
+	title("Death")
+	if(j==2) dev.off();
+}
+```
+
+```{r}
+#Plot the hazard functions for wild-type populations on tert-butyl hydroperoxide
+spans2 = spans[spans$Experiment == "tbooh_1_5mm_6mm",]
+	
+spans2= spans2[spans2$Device != "hare",] #technical problem with this device
+
+
+layout(matrix(1:9,nrow=3))
+if (1){
+	spans2$slow_adj = 0;
+	spans2$expansion_adj = 0;
+	for (g in unique(spans2$group)){
+		sp = spans2[spans2$group==g,]
+		res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$Plate.Name)
+		spans2$expansion_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+	}
+	
+	for (g in unique(spans2$group)){
+		sp = spans2[spans2$group==g,]
+		sp$slow_age[sp$slow_age <= 0] = min(sp$slow_age[sp$slow_age > 0])
+		res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$Plate.Name)
+		spans2$slow_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+	}
+}
+
+sp_v = spans2;
+sp_v$event = "vigorous movement"
+sp_v$Age.at.Death..d..Raw = spans2$slow_age
+sp_e = spans2;
+sp_e$event = "death"
+sp_e$Age.at.Death..d..Raw = spans2$expansion
+sp_m = spans2;
+sp_m$event = "movement cessation"
+sp_m$Age.at.Death..d..Raw = spans2$movement_cessation
+
+colors = c("black","red","purple")
+sp = rbind(sp_v,sp_e,sp_m)
+layout(matrix(1:9,nrow=3))
+if (1){
+g = "wildtype OP50 25C";
+ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+	km_spline_knots=30,
+	km_spline_lambda=12,
+	xlim=c(1,14),ylim=c(.025,1),
+	khaz_min_dt=2,khaz_number_of_steps=NA,
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+	colors = colors
+	);
+title(paste(g,"N=",sum(sp$group==g)))
+
+g = "1.5"
+m = ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(.75,2.5),ylim=c(.2,7),
+	khaz_min_dt=.8,khaz_number_of_steps=NA,
+	x_axis_tick=seq(.5,2.5,.25),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+	colors = colors);
+title(paste(g,"N=",sum(sp$group==g)))
+#browser()
+g = "3"
+sp2 = sp;
+sp2$Age.at.Death..d..Raw = 24*sp2$Age.at.Death..d..Raw;
+ns_plot_colored_hazard_by_groups(sp2[sp2$group==g,],"event",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(1,24),ylim=c(.02,1),
+	khaz_min_dt=NA,khaz_number_of_steps=20,
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+	colors = colors);
+title(paste(g,"N=",sum(sp$group==g)))
+
+
+colors = c("black","blue","red","green")
+ns_plot_colored_hazard_by_groups(sp_v,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(1,18),ylim=c(.01,5),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=T,
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),colors=colors);
+title("Vigorous")
+ns_plot_colored_hazard_by_groups(sp_m,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(1,18),ylim=c(.01,5),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=T,
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),,colors=colors);
+title("Weak")
+
+ns_plot_colored_hazard_by_groups(sp_e,"group",
+	km_spline_knots=10,
+	km_spline_lambda=2,
+	xlim=c(1,18),ylim=c(.01,5),
+	khaz_min_dt=3,khaz_number_of_steps=NA,logx=T,
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),,colors=colors);
+title("Death")
+
+}
+
+sp_v = spans2;
+sp_v$event = "vigorous movement"
+sp_v$Age.at.Death..d..Raw = spans2$slow_age;
+sp_e = spans2;
+sp_e$event = "death"
+sp_e$Age.at.Death..d..Raw = spans2$expansion - spans2$movement_cessation;
+is_zero = sp_e$Age.at.Death..d..Raw <= .1;
+sp_e$Age.at.Death..d..Raw[is_zero] = runif(sum(is_zero),.1,.11)
+
+sp_m = spans2;
+sp_m$event = "movement cessation"
+sp_m$Age.at.Death..d..Raw = spans2$movement_cessation - spans2$slow_age;
+
+if (1){
+ns_plot_colored_hazard_by_groups(sp_v,"group",
+	km_spline_knots=10,
+	km_spline_lambda=4,
+	xlim=c(1,18),ylim=c(.01,5),
+				
+	x_axis_tick=seq(0,18,2),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5,5),
+	colors=colors);
+title("Vigorous")
+
+ns_plot_colored_hazard_by_groups(sp_m,"group",
+	km_spline_knots=15,
+	km_spline_lambda=3,
+	xlim=c(.5,10),ylim=10^c(-1,log10(1.5)),
+	khaz_min_dt=1,khaz_number_of_steps=NA,logx=T,x_axis_tick=seq(0,10,1),
+	y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5),colors=colors);
+title("Weak")
+}
+
+ns_plot_colored_hazard_by_groups(sp_e,"group",
+	km_spline_knots=60,
+	km_spline_lambda=120,
+	xlim=c(.1,5),ylim=10^c(log10(.25),1),
+	khaz_number_of_steps=NA,khaz_min_dt=.1,logx=T,
+	x_axis_tick=c(.1,seq(.5,4,.5)),
+	y_axis_tick=c(.25,.5,.75,1,2.5,5),
+	plot_percentile_limits=c(0,.95),colors=colors);
+title("Death")
+
+```
+
+
+```{r}
+#Plot the hazard functions for eat-2 and starved populations
+spans2 = spans[spans$Experiment == "eat2",]
+	
+		spans2$control = 0;
+		spans2$control[spans2$group=="wildtype OP50 25C Fed"] = 1;
+
+	
+
+		spans2$slow_adj = 0;
+		spans2$expansion_adj = 0;
+		for (g in unique(spans2$group)){
+			sp = spans2[spans2$group==g,]
+			res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$Plate.Name)
+			spans2$expansion_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+		}
+		#ns_plot_colored_hazard_by_groups(spans2,"group",km_spline_lambda=5);
+		for (g in unique(spans2$group)){
+			sp = spans2[spans2$group==g,]
+			sp$slow_age[sp$slow_age <= 0] = min(sp$slow_age[sp$slow_age > 0])
+			res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$Plate.Name)
+			spans2$slow_adj[spans2$group==g] = res$bj_residual*exp(res$intercept)
+		}
+
+		sp_v = spans2;
+		sp_v$event = "vigorous movement"
+		sp_v$Age.at.Death..d..Raw = spans2$slow_age
+		sp_e = spans2;
+		sp_e$event = "death"
+		sp_e$Age.at.Death..d..Raw = spans2$expansion
+		sp_m = spans2;
+		sp_m$event = "movement cessation"
+		sp_m$Age.at.Death..d..Raw = spans2$movement_cessation
+
+		colors = c("black","red","purple")
+		sp = rbind(sp_v,sp_e,sp_m)
+		g = "wildtype OP50 25C Fed" 
+		layout(matrix(1:9,nrow=3))
+		ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+			km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,26),ylim=c(.01,.75),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),
+			colors = colors
+			);
+		title(paste(g,"N=",sum(sp$group==g)))
+
+g = "eat-2 Fed"
+		ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+			km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,26),ylim=c(.01,.75),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),
+			colors = colors);
+		title(paste(g,"N=",sum(sp$group==g)))
+		
+  	g = "wildtype OP50 25C Starved"
+		ns_plot_colored_hazard_by_groups(sp[sp$group==g,],"event",
+		km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,26),ylim=c(.01,.75),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),
+			colors = colors);
+		title(paste(g,"N=",sum(sp$group==g)))
+
+		colors = c("blue","red","green")
+		ns_plot_colored_hazard_by_groups(sp_v,"group",
+		km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,26),ylim=c(.01,1),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),colors=colors);
+		title("Vigorous")
+		
+		ns_plot_colored_hazard_by_groups(sp_m,"group",
+		km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,24),ylim=c(.01,.5),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),colors=colors);
+		title("Weak")
+
+		ns_plot_colored_hazard_by_groups(sp_e,"group",
+		km_spline_knots=20,
+			km_spline_lambda=12,
+			xlim=c(6,28),ylim=c(.01,.75),
+			khaz_min_dt=5,khaz_number_of_steps=NA,
+			x_axis_tick=seq(6,28,2),
+			y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75),colors=colors);
+		title("Death")
+```
+
+
+```{r}
+sp_v = spans2;
+	sp_v$event = "vigorous movement"
+	sp_v$Age.at.Death..d..Raw = spans2$expansion -spans2$slow_age;
+	sp_e = spans2;
+	sp_e$event = "death"
+	sp_e$Age.at.Death..d..Raw = spans2$expansion - spans2$movement_cessation;
+	is_zero = sp_e$Age.at.Death..d..Raw <= .1;
+	sp_e$Age.at.Death..d..Raw[is_zero] = runif(sum(is_zero),.1,.11)
+
+	sp_m = spans2;
+	sp_m$event = "movement cessation"
+	sp_m$Age.at.Death..d..Raw = spans2$movement_cessation - spans2$slow_age;
+
+
+	ns_plot_colored_hazard_by_groups(sp_v,"group",
+		km_spline_knots=10,
+		km_spline_lambda=4,
+		xlim=c(.5,7),ylim=c(.1,2),
+		logx=T,		
+		khaz_min_dt=2,khaz_number_of_steps=NA,
+		x_axis_tick=c(.5,1,seq(2,8,2)),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2),
+		colors=colors);
+	title("Vigorous")
+
+	ns_plot_colored_hazard_by_groups(sp_m,"group",
+		km_spline_knots=15,
+		km_spline_lambda=3,
+		xlim=c(.5,10),ylim=10^c(-1,log10(1.5)),
+		khaz_min_dt=2,khaz_number_of_steps=NA,logx=T,x_axis_tick=seq(0,10,1),
+		y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,2.5),colors=colors);
+	title("Weak")
+	
+
+	ns_plot_colored_hazard_by_groups(sp_e,"group",
+		km_spline_knots=60,
+		km_spline_lambda=120,
+		xlim=c(.1,5),ylim=10^c(log10(.25),1),
+		khaz_number_of_steps=NA,khaz_min_dt=.3,logx=T,
+		x_axis_tick=c(.1,seq(.5,4,.5)),
+		y_axis_tick=c(.25,.5,.75,1,2.5,5),
+		plot_percentile_limits=c(0,.95),colors=colors);
+	title("Death")
+```
+
+
+
+
+
+```{r}
+source("../shared_scripts/ns_multistate_basics.r")
+source("../shared_scripts/plot_fit_diagnostics.r")
+  #compare spans for wildtype at 20 and 25C
+for (i in 1:2){
+  if (i == 1)pdf("wt_20_25=reg.pdf",width=10,height=8)
+		par(mai=c(1,1,.7,.7))
+	res =	plot_fit_diagnostics(spans,experiments_to_plot = c("four_temp_scaling"),
+  		only_plot_control = F,
+  		plot_intermediate_states = F,
+  		calc_boot=F)
+	if (i == 1)dev.off();
+}
+```
+
+
+```{r}
+    #compare spans for daf-2 and wildtype
+		par(mai=c(1,1,.7,.7))
+		plot_fit_diagnostics(spans,experiments_to_plot = c("daf2_age1_25C"),
+		only_plot_control = F,
+		plot_intermediate_states = F,
+		calc_boot=F)
+```
+
+
+```{r}
+#compare spans on t-BuOOH
+	
+		par(mai=c(1,1,1,.1))
+		plot_fit_diagnostics(spans,experiments_to_plot = c("tbooh_1_5mm_6mm"),
+		only_plot_control = F,
+		plot_intermediate_states = F,
+		calc_boot=F)
+	
+```
+
+```{r}
+
+#compare spans on eat-2
+	for (j in 1:2){
+	  if (j==2)pdf("eat_2_spans_rep1.pdf",width=7,height=7)
+		par(mai=c(1,1,1,.1))
+		res = plot_fit_diagnostics(spans,experiments_to_plot = c("eat2_wt_20c"),
+		only_plot_control = F,
+		plot_intermediate_states = F,
+		calc_boot=F)
+		print(res$glm_results[,c("group","val","val_li","val_ui")])
+		
+    glm_results = res[["glm_results"]]
+    write.csv(glm_results,"glm_eat2_rep1_res.csv")
+		if (j==2) dev.off();
+	}
+	
+```
+```{r}
+
+source("../shared_scripts/plot_fit_diagnostics.r")
+#compare spans on eat-2 rep2
+		for (j in 1:2){
+	  if (j==2)pdf("eat_2_spans_rep2.pdf",width=7,height=7)
+		par(mai=c(1,1,1,.1))
+		res = plot_fit_diagnostics(spans,experiments_to_plot = c("eat2"),
+		only_plot_control = F,
+		plot_intermediate_states = F,
+		calc_boot=F)
+		print(res$glm_results[,c("group","val","val_li","val_ui")])
+		
+	#	filename = "eat2_rep2_boot_results.csv"
+    glm_results = res[["glm_results"]]
+    write.csv(glm_results,"glm_eat2_rep2_res.csv")
+		if (j==2)dev.off();
+		}
+	
+```
+
+```{r}
+#compare spans for wildtype at 20 and 25C excluding tails of distributions at request of reviewer
+results = NULL
+for (i in c("death","vmc","both")){
+  for (q in c("bottom","top","both")){
+        pdf(paste("wildtype_spans_with_outliers_removed=",i,"=",q,".pdf"),width=10,height=10)
+      		par(mai=c(1,1,.7,.7))
+      		res = plot_fit_diagnostics(spans,experiments_to_plot = c("four_temp_scaling"),
+        		only_plot_control = F,
+        		plot_intermediate_states = F,
+        		exclude_extreme_quantiles = i,
+        		quantiles_to_exclude = q,
+        		calc_boot=F)
+        dev.off();
+    r = res$glm_results;
+    r$span= i;
+    r$excluded = q;
+      results = rbind(r,results);
+  }
+}
+
+i = "none";
+q= "none"
+pdf(paste("wildtype_spans_with_outliers_removed=",i,"=",q,".pdf"),width=10,height=10)
+par(mai=c(1,1,.7,.7))
+res = plot_fit_diagnostics(spans,experiments_to_plot = c("four_temp_scaling"),
+	only_plot_control = F,
+	plot_intermediate_states = F,
+	exclude_extreme_quantiles = i,
+	quantiles_to_exclude = q,
+	calc_boot=F)
+dev.off();
+r = res$glm_results;
+r$span= i;
+r$excluded = q;
+results = rbind(r,results);
+dev.off()
+write.csv(results,"quantile_exclusion.csv")
+
+```
+
+```{r}
+for (j in 1:2){
+  if (j ==1) pdf("exclusion_survey.pdf",height=5,width=5)
+results$excluded[results$excluded=="none"] = "[0,1]"
+results$excluded[results$excluded=="both"] = "[.05,.95]"
+results$excluded[results$excluded=="top"] = "[0,.95]"
+results$excluded[results$excluded=="bottom"] = "[.05,1]"
+results$lab = paste(results$span,results$excluded);
+results$lab = factor(results$lab,levels=c("none [0,1]","vmc [.05,1]","vmc [0,.95]","vmc [.05,.95]","death [.05,1]","death [0,.95]","death [.05,.95]","both [.05,1]", "both [0,.95]","both [.05,.95]"));
+res = results[results$temperature == 20,]
+plot(as.numeric(res$lab),res$val,xaxt='n',xlab="",ylab="Bv",ylim=range(res$val_ui,res$val_li,1.1),bg="black",pch=21,col="black")
+for (i in 1:(dim(res)[1])){
+ lines(rep(as.numeric(res$lab[i]),2),c(res$val_li[i],res$val_ui[i])) 
+}
+axis(1,at=as.numeric(res$lab),labels=as.character(res$lab),las=2)
+abline(h=1,lty=2,col="gray")
+if (j ==1)dev.off()
+}
+
+```
+
+
+
+```{r}
+
+source("../shared_scripts/ns_multistate_basics.r")
+source("../shared_scripts/plot_fit_diagnostics.r")
+	#Estimate relationship between spans for each control condition (usually wild-type animals at 20C)
+	#across all experiments, and write the results to disk. 
+	experiments_to_plot = unique(spans$Experiment);
+	experiments_to_plot = experiments_to_plot[! experiments_to_plot %in% c("CA1200_AMP100_dosage")]
+	
+
+	res = plot_fit_diagnostics(spans,experiments_to_plot = experiments_to_plot[order(experiments_to_plot!="four_temp_scaling")],
+	only_plot_control = T,
+	make_any_plots = F,
+	plot_intermediate_states = T,
+	calc_boot=T
+	)
+	glm_results = res[["glm_results"]]
+	write.csv(glm_results,"../data/glm_all_results=big_run2.csv")
+
+```
+
+```{r}
+#write stats to pretty table
+stats = read.csv("../data/glm_all_results=big_run2.csv");
+amp100_files = c("AMP100_Dosage_Series","CA1200_AMP100_dosage");
+
+stats_to_print= stats[!stats$Experiment %in% amp100_files & stats$stage == "vigorous_vs_death",]
+stats_to_print$val = round(stats_to_print$val,2)
+stats_to_print$upper = round(stats_to_print$val_ui,3)
+stats_to_print$lower = round(stats_to_print$val_li,3)
+stats_to_print$diff_val = round(stats_to_print$diff_val,2)
+stats_to_print$diff_upper = round(stats_to_print$diff_ui,3)
+stats_to_print$diff_lower = round(stats_to_print$diff_li,3)
+stats_to_print$ci = apply(stats_to_print,1,FUN=function(x)paste0("(",x[["lower"]],",",x[["upper"]],")"))
+stats_to_print$diff_ci = apply(stats_to_print,1,FUN=function(x)paste0("(",x[["diff_lower"]],",",x[["diff_upper"]],")"))
+
+pr = function(x){
+	#return(paste (x,x <= 10^-10));
+	if (x < 10^-10){
+		return("<1e-10");
+	}else return(formatC(x, format = "e", digits = 1))
+}
+stats_to_print$p_nice = apply(stats_to_print,1,FUN=function(x)pr(as.numeric(x[["diff_p"]])));
+stats_to_print = stats_to_print[,c("Experiment","group","replicate_id","food","temperature","N","val","ci","diff_val","diff_ci","p_nice")]
+
+stats_to_print = stats_to_print[order(stats_to_print$Experiment,stats_to_print$val,decreasing=T),]
+write.csv(stats_to_print,"beta_estimates_formatted.csv")
+```
+
+

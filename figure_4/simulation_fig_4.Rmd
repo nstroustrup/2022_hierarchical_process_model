@@ -1,0 +1,479 @@
+
+```{r}
+library(survival)
+library("statmod")
+library("RColorBrewer")
+
+```
+
+```{r}
+if (1){
+  #First, we generate random matrices that we can use for the different simulations. 
+  #There's no need to generate these separately for each sim.
+	drift = 12
+	drift_2= 7.5
+	step_var = 160
+	N_walkers = 2500
+	start_val = 400000;
+	mean_end_time = start_val/drift;
+	g_v = 240;
+	individual_frailties = rgamma(N_walkers,g_v,g_v)
+	
+	g_v_single = 60;
+	individual_frailties_single_process = rgamma(N_walkers,g_v_single,g_v_single)
+
+	sim_time = floor(3*start_val/drift_2);
+
+	thresh_1 = 30000;
+	thresh_2 = 0;
+	time_scale = 1800;
+
+	#random walkers with transitions depending on one walk
+	#each individual is a column, time is in rows.
+	steps = matrix(rnorm(n=N_walkers*sim_time,mean=drift, sd=step_var),nrow=sim_time)
+	steps_2 = matrix(rnorm(n=N_walkers*sim_time,mean=drift_2, sd=step_var),nrow=sim_time)
+	steps_3 = matrix(rnorm(n=N_walkers*sim_time,mean=0, sd=step_var),nrow=sim_time)
+	na = rep(NA,N_walkers)
+	passage_times = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+	passage_times_2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+	
+	walks = matrix(NA,nrow=dim(steps)[1],ncol=dim(steps)[2])
+	walks_2 = matrix(NA,nrow=dim(steps)[1],ncol=dim(steps)[2])
+xlab="State 1 Exit Time"
+ylab="State 2 Duration"
+
+col = rgb(0,0,0,.6)
+split_cols = brewer.pal(3,"Dark2")
+}
+
+```
+
+```{r}
+
+
+par(mai=c(.5,.5,.3,.3))
+
+
+col = rgb(0,0,0,.6)
+split_cols = brewer.pal(3,"Dark2")
+all=F
+partial_dependence=F
+
+#plot various interesting stats about the underlying data
+
+layout(matrix(c(1:3,13:15,4:6,16:18,7:9,19:21,10:12,22:24),ncol=6,byrow=T))
+a = density(individual_frailties,adjust=2)
+plot(a,xlab="Frailties",main=NA);
+if (0){
+
+	b = density(steps)
+	c = density(steps_2)
+	x_rng = quantile(c(b$x,c$x),c(.2,.8))
+	y_rng = range(b$y,c$y);
+	plot(c(),c(),xlim=x_rng,ylim=y_rng,xlab="Step size (AU)",ylab="pdf")
+	lines(b,col="red")
+	lines(c,col="blue")
+
+}
+
+swalks = start_val-cumsum(steps[,1])
+p1 = min(which(swalks<= thresh_1))
+p2 = min(which(swalks<= thresh_2))
+x_rng = c(0,p2)/time_scale
+y_rng = c(0,max(swalks));
+plot(c(),c(),xlim=x_rng,ylim=y_rng,xlab="Cur State",ylab="val")
+lines(c(0,p1)/time_scale,c(thresh_1,thresh_1),col="gray",lty=2)
+lines(c(p1,p1)/time_scale,c(thresh_1,0),col="gray",lty=2)
+points(p1/time_scale,thresh_1,bg="red",col="red",pch=21,lty=2)
+points(p2/time_scale,thresh_2,bg="blue",col="blue",pch=21,lty=2)
+lines(1:p2/time_scale,swalks[1:p2],col="red")
+
+
+
+swalks = start_val-cumsum(steps[,1])-thresh_1
+swalks2 = start_val-cumsum(steps_2[,1])-thresh_1
+
+p1 = min(which(swalks<= 0))
+p2 = min(which(swalks2<= 0))
+swalks[p1:sim_time] = 0
+swalks2[p2:sim_time] = 0
+x_rng = range(c(0,p1,p2))/time_scale;
+y_rng = c(0,max(max(swalks),max(swalks2)));
+plot(c(),c(),xlim=x_rng,ylim=y_rng,xlab="Cur State",ylab="val")
+lines(c(0,p2)/time_scale,c(0,0),col="gray",lty=2)
+lines(1:p1/time_scale,swalks[1:p1],col="red")
+lines(1:p2/time_scale,swalks2[1:p2],col="blue")
+points(p1/time_scale,0,bg="red",col="red",pch=21,lty=2)
+points(p2/time_scale,0,bg="blue",col="blue",pch=21,lty=2)
+#stop()
+```
+
+
+```{r}
+#calculate simplest model with one process and no frailty
+
+	#layout(matrix(c(1:3,13:15,4:6,16:18,7:9,19:21,10:12,22:24),ncol=6,byrow=T))
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i])
+		walks[ walks[,i]<0,i] = 0;
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+		passage_times$thresh_2[i] = min(which(walks[,i]<= thresh_2))/time_scale
+	}
+	
+	for (j in 1:2){
+	if (j==1)pdf("one_proc_no_frail.pdf",width=10,height=8)
+
+	passage_times$dur_2 = passage_times$thresh_2- passage_times$thresh_1;
+	passage_times$dur_3 = passage_times$thresh_3- passage_times$thresh_2;
+	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(thresh_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	abline(a=0,b=1,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(dur_2~thresh_1,passage_times);
+	title(summary(lmr)$r.sq)
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	abline(a=0,b=0,lty=2,col="gray")
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Weiner Process",legend=levels(passage_times$v),col=colors,lty=1)
+ if (j==1) dev.off();
+  }
+```
+
+```{r}
+#frailty model
+
+	#mimic the effect of frailty by biasing individual random walks according to a gamma distributed random variable.
+	passage_times2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i]*individual_frailties_single_process[i])	#alter the drift term by the frailty.
+		walks[ walks[,i]<0,i] = 0;
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+		passage_times$thresh_2[i] = min(which(walks[,i]<= thresh_2))/time_scale
+	}
+	passage_times$dur_2 = passage_times$thresh_2- passage_times$thresh_1;
+	passage_times$dur_3 = passage_times$thresh_3- passage_times$thresh_2;		
+	
+	for (j in 1:2){
+	  if (j==1)pdf("one_proc_frailty.pdf",width=10,height=8)
+	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(thresh_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	abline(a=0,b=1,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(dur_2~thresh_1,passage_times);
+	title(summary(lmr)$r.sq)
+	abline(a=0,b=0,lty=2,col="gray")
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Weiner Process with frailty",legend=levels(passage_times$v),col=colors,lty=1)
+
+ if (j==1) dev.off();
+  }
+
+```
+```{r}
+#variable treshold + frailty
+
+	layout(matrix(1:3,ncol=3,byrow=T))
+	thresh_1_random = rnorm(N_walkers,thresh_1,thresh_1/2)
+	#mimic the effect of frailty by biasing individual random walks according to a gamma distributed random variable.
+	passage_times2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i]*individual_frailties_single_process[i])	#alter the drift term by the frailty.
+		walks[ walks[,i]<0,i] = 0;
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1_random))/time_scale
+		passage_times$thresh_2[i] = min(which(walks[,i]<= thresh_2))/time_scale
+	}
+	passage_times$dur_2 = passage_times$thresh_2- passage_times$thresh_1;
+	passage_times$dur_3 = passage_times$thresh_3- passage_times$thresh_2;
+		for (j in 1:2){
+	  if (j==1)pdf("one_proc_variable_thresh_frailty.pdf",width=10,height=8)
+	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(thresh_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	abline(a=0,b=1,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(dur_2~thresh_1,passage_times);
+	abline(a=0,b=0,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Weiner Process with frailty",legend=levels(passage_times$v),col=colors,lty=1)
+	
+ if (j==1) dev.off();
+  }
+```
+
+```{r}
+#paradoxical frailty
+
+	#g_v = 40;
+	#individual_frailties = rgamma(N_walkers,g_v,g_v)
+
+	#mimic the effect of frailty by biasing individual random walks according to a gamma distributed random variable.
+	passage_times2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+	walks = matrix(NA,nrow=dim(steps)[1],ncol=dim(steps)[2])
+	for (i in 1:N_walkers){
+		step_mod = steps[,i];
+		#find the time where each individual switches state
+		walks[,i] = start_val-cumsum(step_mod*individual_frailties_single_process[i])	#alter the drift term by the frailty.
+		walks[ walks[,i]<0,i] = 0;
+		in_state_2 = walks[,i]<= thresh_1;
+		#flip the frailties after the state transitions
+		step_mod[in_state_2] = step_mod[in_state_2]/individual_frailties_single_process[i]
+		step_mod[!in_state_2] = step_mod[!in_state_2]*individual_frailties_single_process[i]
+		
+		#now calculate the walks
+		walks[,i] = start_val-cumsum(step_mod)	
+		
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+		passage_times$thresh_2[i] = min(which(walks[,i]<= thresh_2))/time_scale
+	}
+	passage_times$dur_2 = passage_times$thresh_2- passage_times$thresh_1;
+	passage_times$dur_3 = passage_times$thresh_3- passage_times$thresh_2;
+		for (j in 1:2){
+  if (j==1)pdf("one_proc_paradox_frailty.pdf",width=10,height=8)
+
+	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(thresh_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	abline(a=0,b=1,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(dur_2~thresh_1,passage_times);
+	abline(a=0,b=0,lty=2,col="gray")
+	title(summary(lmr)$r.sq)
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Weiner Process with paradoxical frailty",legend=levels(passage_times$v),col=colors,lty=1)		
+ if (j==1) dev.off();
+  }
+
+```
+
+```{r}
+#Two process
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i])
+		walks_2[,i] = start_val-cumsum(steps_2[,i])
+		walks[ walks[,i]<0,i] = 0;
+		walks_2[ walks_2[,i]<0,i] = 0;
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+		passage_times$thresh_2[i] = min(which(walks_2[,i]<= thresh_1))/time_scale
+	}
+```
+
+
+```{r}
+	passage_times$dur_2 = passage_times$thresh_2 - passage_times$thresh_1;
+		for (j in 1:2){
+	  if (j==1)pdf("two_proc.pdf",width=10,height=8)
+	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr2 = lm(thresh_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr2),col="red",lwd=2.5)
+	abline(a=0,b=1,lty=2,col="gray")
+	title(summary(lmr2)$r.sq)
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr2 = lm(dur_2~thresh_1,passage_times,lwd=2.5);
+	title(summary(lmr2)$r.sq)
+	lines(passage_times$thresh_1,predict(lmr2),col="red")
+	abline(a=0,b=0,lty=2,col="gray")
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Two Weiner processes",legend=levels(passage_times$v),col=colors,lty=1)
+
+ if (j==1) dev.off();
+  }
+
+```
+
+```{r}
+#Two process with frailty
+
+	#mimic the effect of frailty by biasing individual random walks according to a gamma distributed random variable.
+	passage_times2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i]*individual_frailties[i])	#alter the drift term by the frailty.
+		walks_2[,i] = start_val-cumsum(steps_2[,i]*individual_frailties[i])	#alter the drift term by the frailty.
+		walks[ walks[,i]<0,i] = 0;
+		walks_2[ walks_2[,i]<0,i] = 0;
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+		passage_times$thresh_2[i] = min(which(walks_2[,i]<= thresh_1))/time_scale
+	}
+passage_times$dur_2 = passage_times$thresh_2 - passage_times$thresh_1;
+```
+
+
+```{r}
+	for (j in 1:2){
+	  if (j==1)pdf("two_proc_frail.pdf",width=10,height=8)
+  	plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+  	lmr = lm(thresh_2~thresh_1,passage_times);
+  	
+  	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+  	title(summary(lmr)$r.sq)
+  	abline(a=0,b=1,lty=2,col="gray")
+  	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+  	lmr = lm(dur_2~thresh_1,passage_times);
+  	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	  abline(a=0,b=0,lty=2,col="gray")
+  	title(summary(lmr)$r.sq)
+  	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+  	srv = survfit(Surv(dur_2)~v,data=passage_times);
+  	colors = split_cols;
+  	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+  	legend("bottomleft",bty="n",title="Two Weiner Processes with frailty",legend=levels(passage_times$v),col=colors,lty=1)
+  	 if (j==1) dev.off();
+  }
+```
+
+```{r}
+#Two process with frailty and process 2 truncates process 1
+	#mimic the effect of frailty by biasing individual random walks according to a gamma distributed random variable.
+	passage_times2 = data.frame(id=1:N_walkers,thresh_1=na,thresh_2=na,thresh_3=na)
+
+	for (i in 1:N_walkers){
+		walks[,i] = start_val-cumsum(steps[,i]*individual_frailties[i])	#alter the drift term by the frailty.
+		walks_2[,i] = start_val-cumsum(steps_2[,i]*individual_frailties[i])	#alter the drift term by the frailty.
+		walks[ walks[,i]<0,i] = 0;
+		walks_2[ walks_2[,i]<0,i] = 0;
+		passage_times$thresh_2[i] = min(which(walks_2[,i]<= thresh_1))/time_scale
+		passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1),passage_times$thresh_2[i]*time_scale)/time_scale 	#process 2 truncates process 1 
+	}
+	passage_times$dur_2 = passage_times$thresh_2 - passage_times$thresh_1;
+```
+
+
+```{r}
+	for (j in 1:2){
+	  if (j==1)pdf("two_proc_frail_trunc.pdf",width=10,height=8)
+plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(thresh_2~thresh_1,passage_times);
+	
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	title(summary(lmr)$r.sq)
+	abline(a=0,b=1,lty=2,col="gray")
+	
+	plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(dur_2~thresh_1,passage_times);
+	lines(passage_times$thresh_1,predict(lmr),col="red",lwd=2.5)
+	title(summary(lmr)$r.sq)
+	abline(a=0,b=0,lty=2,col="gray")
+	passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+	srv = survfit(Surv(dur_2)~v,data=passage_times);
+	colors = split_cols;
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Two Weiner Processes with frailty",legend=levels(passage_times$v),col=colors,lty=1)
+ if (j==1) dev.off();
+  }
+
+```
+
+
+```{r}
+	passage_times_1 = rinvgauss(N_walkers,20,960)
+	passage_times_2 = rinvgauss(N_walkers,32,960)
+	p_diff = passage_times_2 - passage_times_1;
+	plot (passage_times_1,passage_times_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(passage_times_2~passage_times_1,passage_times);
+	lines(passage_times_1,predict(lmr),col="red",lwd=2.5)
+	title(summary(lmr)$r.sq)
+	plot (passage_times_1,p_diff,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+	lmr = lm(p_diff~passage_times_1,passage_times);
+	title(summary(lmr)$r.sq)
+	lines(passage_times_1,predict(lmr),col="red",lwd=2.5)
+	v = cut(passage_times_1,quantile(passage_times_1,(0:3)/3))
+	srv = survfit(Surv(p_diff)~v,);
+	plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+	legend("bottomleft",bty="n",title="Difference between random variables",legend=levels(passage_times$v),col=colors,lty=1)
+
+```
+
+```{r}
+#Repeat simulation with different dependences between processes.
+
+	weights_to_plot = seq(0,1,.20)
+	weights_to_calculate = seq(0,1,.05)
+	par(mai=c(.5,.5,.3,.3))
+	layout(matrix(1:(3*length(weights_to_plot)),ncol=9,byrow=T))
+	results = NULL
+	for (w in weights_to_calculate){
+		#we design this so indepdence varies while not changing mean and variance.
+		#norm(mean,std^2) = norm(mean,(sqrt(1-w)*std)^2 + norm(0,*(sqrt(w)*std)^2)
+		#mean remains constant at mean + 0 = mean
+		#var remains constant at (1-w)*std^2 + w*std^2
+		
+		steps_w = matrix(rnorm(n=N_walkers*sim_time,mean=drift, sd=sqrt(1-w)*step_var),nrow=sim_time)
+		steps_w2 = matrix(rnorm(n=N_walkers*sim_time,mean=drift_2, sd=sqrt(1-w)*step_var),nrow=sim_time)
+		steps_w3 = matrix(rnorm(n=N_walkers*sim_time,mean=0, sd=sqrt(w)*step_var),nrow=sim_time)
+	
+		for (i in 1:N_walkers){
+			walks[,i] =   start_val-cumsum((steps_w[,i]  +steps_w3[,i])*individual_frailties[i])	
+			walks_2[,i] = start_val-cumsum((steps_w2[,i]+steps_w3[,i])*individual_frailties[i])	
+			walks  [ walks  [,i]<0,i] = 0;
+			walks_2[ walks_2[,i]<0,i] = 0;
+			passage_times$thresh_1[i] = min(which(walks[,i]<= thresh_1))/time_scale
+			passage_times$thresh_2[i] = min(which(walks_2[,i]<= thresh_1))/time_scale
+		}
+		
+		passage_times$dur_2 = passage_times$thresh_2 - passage_times$thresh_1;
+		
+		
+		plot_this = w %in% weights_to_plot
+		lmr = lm(dur_2~thresh_1,passage_times,lwd=2.5);
+		ci = confint(lmr);
+		r = data.frame(w=w,v=coef(lmr)["thresh_1"],lower=ci["thresh_1",1],upper=ci["thresh_1",2],p=summary(lmr)$coefficients["thresh_1","Pr(>|t|)"],rsq=summary(lmr)$adj.r.squared)
+		results = rbind(r,results);
+		if (plot_this){
+			plot (passage_times$thresh_1,passage_times$thresh_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+			lmr2 = lm(thresh_2~thresh_1,passage_times);
+			lines(passage_times$thresh_1,predict(lmr2),col="red",lwd=2.5)
+			plot (passage_times$thresh_1,passage_times$dur_2,pch=21,bg=col,col=NA,xlab=xlab,ylab=ylab)
+			lines(passage_times$thresh_1,predict(lmr),col="red")
+			passage_times$v = cut(passage_times$thresh_1,quantile(passage_times$thresh_1,(0:3)/3))
+			srv = survfit(Surv(dur_2)~v,data=passage_times);
+			colors = split_cols;
+			plot(srv,col=split_cols,xlab="Time",ylab="Fraction Remaining in State 2")
+			legend("bottomleft",bty="n",title=paste("Two Weiner processes",w),legend=levels(passage_times$v),col=colors,lty=1)
+		}
+	}
+	write.csv(results,"variable_indepdendence_sim.csv")
+
+```
+```{r}
+
+#plot results of partial independence sim
+ylim = range(results[,2:4])
+xlim = range(results$w)
+par(mai=c(.5,.5,.3,.3))
+plot(c(),c(),type='n',xlim=xlim,ylim=ylim,xlab="Dependence between Processes",ylab="Correlation between Stage 1 exit time and Stage 2 Duration")
+
+for (i in rev(1:(dim(results)[1]))){
+	points(results$w[i],results$v[i],pch=21,bg="black",col="black")
+	r = 2*results$v[i]-results$lower[i]
+	lines(rep(results$w[i],2),c(results$lower[i],r))
+	#lines(rep(results$w[i],2),results[i,c("lower","upper")])
+}
+
+```

@@ -1,0 +1,514 @@
+```{r}
+library(survival)
+library(pscl)
+library(stats)
+source("../shared_scripts/ns_fd.r")
+```
+
+
+```{r}
+#if needed, load the full by-hand annotated training set and extract VMC, WMC, and lifespan data.
+#This data isn't included in the repository because it's large and we don't use it for any analysis in this code.
+#We can simply directly load the spans from disk the next section.
+load_raw_training_data = F
+if (load_raw_training_data){
+  raw_data = read.csv("../data/training_set.csv.gz")
+  raw_data = subset(raw_data,raw_data$Number.of.Animals.In.Clump %in% c("0","1"))
+  
+  raw_data$by_hand_annotated = !is.na(raw_data$By.Hand.Death.Associated.Expansion.Time);
+  columns_to_use = c("Experiment.Name","Strain","Device","Plate.Name","Excluded","Flag","Censored","Condition.1","Condition.3","Group.ID","Number.of.Animals.In.Clump","Age.Relative.Time",
+  	"By.Hand.Movement.Cessation.Relative.Time","Best.Guess.Death.Associated.Expansion.Time","Best.Guess.Fast.Movement.Cessation.Relative.Time","By.Hand.Death.Associated.Expansion.Time","By.Hand.Post.mortem.Contraction.Time","By.Hand.Post.mortem.Contraction.Stop.Time",
+  	"Change.in.Stabilized.Intensity.2x.pix.hour.","Total.Stabilized.Intensity","First.Observation.Relative.Time")
+  	
+  data2 = raw_data[,columns_to_use]
+  #extract spans with which to plot some pretty multi-state survival curve visualizations
+  #note that throughout this first analysis we plot only by-hand annotated data, as at this stage
+  #we don't yet trust the lifespan data produced by the HMM--that comes later.
+  
+  #all_data = read.csv("wildtype_posture_analysis.csv.gz");
+  all_data = subset(data2,data2$Condition.3 == "HMM Wildtype");
+  all_data$group =  "Wild type"
+  all_data = all_data[all_data$Condition.1 != "started starving",] #plates on which animals exhausted the food supply are excluded from analysis
+  analysis_range = c(-1,1)
+  d = ns_summarize_and_select_data_to_use(all_data,analysis_range);
+  data2 = d[["data"]];
+  animals_to_use = d[["animals_to_use"]]
+  spans = get_individual_spans(data2,0);
+  write.csv(spans,"by_hand_training_set_spans.csv.gz")
+}else{
+spans = read.csv("../data/by_hand_training_set_spans.csv.gz")
+animals_to_use = unique(spans$wrm)
+animals_to_use = animals_to_use[animals_to_use !=  "maple_d::2 42"]	#this individual has a duration changing posture specified as -16800
+spans = spans[spans$wrm !=  "maple_d::2 42",]	
+spans = spans[spans$Experiment != "eat2_wt_20c",] #not enough by-hand annotated wild-type individuals in this experiment to run accurate batch correction, so we exclude it.
+spans$Plate.Name.Exp = paste(spans$Experiment,spans$Plate.Name)
+experiment_metadata = read.csv("../data/experiment_metadata.csv");
+}
+```
+
+
+```{r}
+#plot pretty multi-state survival curve visualizations
+for (temperature in c(20,25)){
+	cur_spans = spans[spans$Experiment %in% experiment_metadata$Experiment[experiment_metadata$Temperature == temperature],]
+	x = 1:length(cur_spans$slow_age);
+
+	cur_spans$total = cur_spans$slow_age+cur_spans$duration_changing_posture+cur_spans$duration_alive_but_nonmoving_crop
+	d = cur_spans[order(cur_spans$total,cur_spans$slow_age,cur_spans$duration_changing_posture,cur_spans$duration_alive_but_nonmoving_crop),]
+	max_y = max(d$total)
+	
+	
+	plot(c(),c(),type="n",ylim=c(0,max(x)+1),xlim=c(0,max_y),xaxt="n",xlab="Time (days)",ylab="Survival")
+	axis(1,at=seq(0,max_y,2),xlab="Time (days)")
+	for (i in x){
+		a = d[i,];
+		xx =c(i,i+1,i+1,i,i);
+		polygon(c(0,0,a$slow_age,a$slow_age,0),max(x)-xx,col="purple",border=NA);
+		polygon(a$slow_age+c(0,0,a$duration_changing_posture,a$duration_changing_posture,0),max(x)-xx,col="orange",border=NA);
+		polygon(a$slow_age+a$duration_changing_posture+c(0,0,a$duration_alive_but_nonmoving_crop,a$duration_alive_but_nonmoving_crop,0),max(x)-xx,col="dark red",border=NA);
+	}
+	lines(c(0,d$total),c(max(x),max(x)-x),col="black",lty=1)
+	title(temperature)
+	d = cur_spans[order(cur_spans$slow_age/cur_spans$total,cur_spans$duration_changing_posture/cur_spans$total,cur_spans$duration_alive_but_nonmoving_crop/cur_spans$total,decreasing=T),]
+	plot(c(),c(),type="n",xlim=c(0,max(x)),ylim=c(0,1),xlab="Animal ID",ylab="Fraction of lifespan")
+	for (i in x){
+		a = d[i,];
+		tot = a$slow_age+a$duration_changing_posture+a$duration_alive_but_nonmoving_crop;
+		xx =c(i,i+1,i+1,i,i);
+		polygon(xx,c(0,0,a$slow_age,a$slow_age,0)/tot,col="purple",border=NA);
+		polygon(xx,(a$slow_age+c(0,0,a$duration_changing_posture,a$duration_changing_posture,0))/tot,col="orange",border=NA);
+		polygon(xx,(a$slow_age+a$duration_changing_posture+c(0,0,a$duration_alive_but_nonmoving_crop,a$duration_alive_but_nonmoving_crop,0))/tot,,col="dark red",border=NA);
+	}
+	title(temperature)
+	slow = mean(d$slow_age)
+	posture = mean(d$duration_changing_posture);
+	duration_alive_but_nonmoving = mean(d$duration_alive_but_nonmoving);
+	max_y =duration_alive_but_nonmoving+posture+slow;
+	plot(c(),c(),type="n",ylim=c(0,1),xlim=c(0,max_y),ylab="Survival",axt="n",xlab="Time (days)")
+	axis(1,at=seq(0,max_y,1),xlab="Time (days)")
+	xx= c(0,1,1,0,0);
+	polygon(c(0,0,slow,slow,0),xx,col="purple",border=NA);
+	polygon(c(0,0,posture,posture,0)+slow,xx,col="orange",border=NA);
+	polygon(c(0,0,duration_alive_but_nonmoving,duration_alive_but_nonmoving,0)+slow+posture,xx,col="dark red",border=NA);
+	title(temperature)
+	
+	plot(ecdf(d$duration_alive_but_nonmoving_crop),verticals=T,pch=NA)
+	plot(ecdf(d$duration_alive_but_nonmoving_crop/d$total),verticals=T,pch=NA)
+	se <- function(x) sqrt(var(x)/length(x))
+	print("Stats");
+	print(paste("N=",dim(d)[1]));
+	print(paste("Total lifespan: ",mean(d$total),"+-",se(d$total)))
+	print(paste("Frac slow: ",mean(d$slow_age/d$total),"+-",se(d$slow_age/d$total)))
+	print(paste("Frac posture: ",mean(d$duration_changing_posture/d$total),"+-",se(d$duration_changing_posture/d$total)))
+	print(paste("Frac non-moving: ",mean(d$duration_alive_but_nonmoving/d$total),"+-",se(d$duration_alive_but_nonmoving/d$total)))
+	print(paste("Absolute non-moving: ",mean(d$duration_alive_but_nonmoving),"+-",se(d$duration_alive_but_nonmoving)))
+}
+
+```
+```{r}
+#function that draws pretty regression diagnostic plots
+plot_loess_residuals_by_experiment = function(resid_x,resid_y,experiment,xlab,ylab,y_max=max(resid_y)){
+	plot(resid_x,resid_y,pch=16,col=rgb(0,0,0,.3),xlab=xlab,ylab=ylab,ylim=c(min(resid_y),y_max))
+	exps = as.character(unique(experiment));
+	colors = rainbow(length(exps))
+	for (expr in c("",exps)){
+		if (expr!=""){
+			if (length(exps)==1)
+				next;
+			d = subset(resid_x,experiment == expr);
+			r = resid_y[experiment == expr]
+			col = colors[which(expr == exps)];
+			lwd = 1;
+		}else{
+			d = resid_x;
+			r = resid_y;
+			col = "black";
+			lwd = 2;
+		}
+		m = loess(r~d,span=1);
+		rng = quantile(d,c(.02,.98))
+		xv = seq(rng[1],rng[2],.1);
+		lines(xv,predict(m,xv),col=col,lwd=lwd)
+	}
+	if (length(exps)>1)
+		legend("bottomleft",bty="n",legend=exps,col=colors,lty=1,cex=.7)
+}
+#plot ecdf of residuals
+plot_ecdf_by_experiment = function(resid,data,xlabel){
+	add = F
+	exps = unique(data$Experiment);
+	rng = range(c(0,quantile(resid,c(.02,.98))))
+	colors = rainbow(length(exps))
+	for (ex in exps){
+		d = subset(resid,data$Experiment == ex)
+		plot(ecdf(d),col=colors[which(ex==exps)],add=add,pch=NA,verticals=T,main=NA,xlim=rng,xlab=xlabel,ylab="cdf");
+		add=T;
+	}
+	plot(ecdf(resid),col="black",lwd=2,add=T,pch=NA,verticals=T);
+	legend("bottomright",bty="n",legend=exps,col=colors,lty=1,cex=.7)
+}
+
+```
+
+```{r}
+ #Run multiple regression model comparing vigorous movement to the time remaining after ceasing vigorous movement 
+		spans$abst = spans$expansion-spans$slow_age
+		spans$abst = vapply(spans$abst,FUN=function(x){if(x > 0) return(x) else return(0);},numeric(1))
+		abst_reg_pois = glm(abst~Plate.Name.Exp+slow_age,data=spans,family=quasipoisson())
+		abst_reg_pois_resid = exp(residuals(abst_reg_pois))
+		print("time_alive_but_stationary ~ Experiment + slow_age")
+		print(summary(abst_reg_pois,test="F"))
+		print(anova(abst_reg_pois,test="F"))
+		plot_ecdf_by_experiment(spans$abst,spans,"Duration Duration Alive but moving weakly or still");
+		plot_ecdf_by_experiment(abst_reg_pois_resid,spans,"Residual Duration Alive but moving weakly or still");
+		abst_reg_pois = glm(abst~Plate.Name.Exp,data=spans,family=quasipoisson())
+		abst_reg_pois_resid = residuals(abst_reg_pois)
+
+		plot_loess_residuals_by_experiment(spans$slow_age,abst_reg_pois_resid,spans$Experiment,"Time spent moving quickly","Duration alive but moving weakly or still");
+```
+
+```{r}
+#Using just the by-hand-annotated data, analyze and plot the relationship between vigorous movement and time spent changing posture (but not still) after ceasing vigorous movement.  Not plotted in the manuscript, but interesting.
+num = aggregate(slow_age~Experiment,data=spans,FUN=length)
+exps = unique(spans$Experiment);
+
+par(mfrow=c(length(exps)/2+1,2))
+slow_vs_posture = NULL
+for (e in exps){
+	sub = spans$Experiment == e & spans$duration_changing_posture >= 0;
+	res = plot_loess_residuals_by_experiment(spans$slow_age[sub],spans$duration_changing_posture[sub],spans$Experiment[sub],xlab="Time spent moving quickly",ylab="Time spent moving weakly")
+	title(paste(experiment_metadata[experiment_metadata$Experiment==e,],collapse=" "))
+	res$temperature = experiment_metadata$Temperature[experiment_metadata$Experiment==e]
+	res$bacteria = experiment_metadata$Bacteria[experiment_metadata$Experiment==e]
+	res$experiment = e;
+	slow_vs_posture = rbind(res,slow_vs_posture)
+}
+sub = spans$Experiment %in% experiment_metadata$Experiment[experiment_metadata$Temperature == 20] & spans$duration_changing_posture >= 0;
+res = plot_loess_residuals_by_experiment(spans$slow_age[sub],spans$duration_changing_posture[sub],spans$Experiment[sub],xlab="Time spent moving quickly",ylab="Time spent moving weakly")
+res = subset(res,res$experiment=="all")
+res$experiment = "All 20C"
+res$temperature = "20"
+res$bacteria = "UV-inactivated"
+slow_vs_posture = rbind(res,slow_vs_posture)
+title("All 25C")
+write.csv(slow_vs_posture,"wildtype_slow_vs_posture.csv")
+
+```
+
+```{r}
+#Using just the by-hand-annotated data, analyze and plot the relationship between the time spent either moving vigorously or changing posture and time spent completely motionless after ceasing postural changes.  Not plotted in the manuscript, but interesting.
+			exps = unique(spans$Experiment);
+	
+			par(mfrow=c(length(exps)/2+1,2))
+			posture_vs_nonmoving = NULL
+			for (e in exps){
+				sub = spans$Experiment == e & spans$duration_changing_posture >= 0;;
+				res = plot_loess_residuals_by_experiment(spans$duration_changing_posture[sub],spans$duration_alive_but_nonmoving[sub],spans$Experiment[sub],xlab="Time spent moving weakly",ylab="Time Alive but nonmoving")
+				title(paste(experiment_metadata[experiment_metadata$Experiment==e,],collapse=" "))
+				res$temperature = experiment_metadata$Temperature[experiment_metadata$Experiment==e]
+				res$bacteria = experiment_metadata$Bacteria[experiment_metadata$Experiment==e]
+				res$experiment = e;
+				posture_vs_nonmoving = rbind(res,posture_vs_nonmoving)
+			}
+			sub = spans$Experiment %in% experiment_metadata$Experiment[experiment_metadata$Temperature == 20]& spans$duration_changing_posture >= 0;
+			res = plot_loess_residuals_by_experiment(spans$duration_changing_posture[sub],spans$duration_alive_but_nonmoving[sub],spans$Experiment[sub],xlab="Time spent moving weakly",ylab="Time Alive but nonmoving")
+			res = subset(res,res$experiment=="all")
+			res$experiment = "All 20C"
+			res$temperature = "20"
+			res$bacteria = "UV-inactivated"
+			posture_vs_nonmoving = rbind(res,posture_vs_nonmoving)
+			title("All 25C")
+			write.csv(posture_vs_nonmoving,"wildtype_posture_vs_nonmoving.csv")
+```
+```{r}
+ #Plot relationship between vigorous movement and completely stationary (not changing posture). Not plotted in the manuscript, but interesting.
+			num = aggregate(slow_age~Experiment,data=spans,FUN=length)
+			exps = unique(spans$Experiment);
+	
+			par(mfrow=c(length(exps)/2+1,2))
+			slow_vs_nonmoving = NULL
+			for (e in exps){
+				sub = spans$Experiment == e & spans$duration_changing_posture >= 0;;
+				res = plot_loess_residuals_by_experiment(spans$slow_age[sub],spans$duration_alive_but_nonmoving[sub],spans$Experiment[sub],xlab="Time spent moving quickly",ylab="Time Alive but nonmoving")
+				title(paste(experiment_metadata[experiment_metadata$Experiment==e,],collapse=" "))
+				res$temperature = experiment_metadata$Temperature[experiment_metadata$Experiment==e]
+				res$bacteria = experiment_metadata$Bacteria[experiment_metadata$Experiment==e]
+				res$experiment = e;
+				slow_vs_nonmoving = rbind(res,posture_vs_nonmoving)
+			}
+			sub = spans$Experiment %in% experiment_metadata$Experiment[experiment_metadata$Temperature == 20]& spans$duration_changing_posture >= 0;
+			res = plot_loess_residuals_by_experiment(spans$slow_age[sub],spans$duration_alive_but_nonmoving[sub],spans$Experiment[sub],xlab="Time spent moving quickly",ylab="Time Alive but nonmoving")
+			res = subset(res,res$experiment=="all")
+			res$experiment = "All 20C"
+			res$temperature = "20"
+			res$bacteria = "UV-inactivated"
+			slow_vs_nonmoving = rbind(res,slow_vs_nonmoving)
+			title("All 25C")
+			write.csv(slow_vs_nonmoving,"wildtype_slow_vs_nonmoving.csv")
+```
+			
+```{r}
+	#fit a multiple regression model comparing vigorous movement with the duration changing posture
+	spans$Plate.Name.Exp = paste(spans$Experiment,spans$Plate.Name)
+	spans$dcp = vapply(spans$duration_changing_posture,FUN=function(x){if(x > 0) return(x) else return(0);},numeric(1))
+
+		spans$Experiment= factor(as.character(spans$Experiment));
+		reg_pois = glm(dcp~Plate.Name.Exp+slow_age,data=spans,family=quasipoisson())
+		reg_pois_resid = exp(residuals(reg_pois))
+		print("Changing Posture ~ Experiment + slow_age")
+		print(summary(reg_pois,test="F"))
+		print(anova(reg_pois,test="F"))
+		plot_ecdf_by_experiment(spans$dcp,spans,"Duration Moving Weakly");
+		plot_ecdf_by_experiment(reg_pois_resid,spans,"Residual Duration Moving Weakly");
+		reg_pois = glm(dcp~Plate.Name.Exp,data=spans,family=quasipoisson())
+		reg_pois_resid = residuals(reg_pois)
+		plot_loess_residuals_by_experiment(spans$slow_age,reg_pois_resid,spans$Experiment,"Time spent moving quickly","Duration Moving Weakly");
+```
+```{r}
+
+	spans$Plate.Name.Exp = paste(spans$Experiment,spans$Plate.Name)
+	spans$dcp = vapply(spans$duration_changing_posture,FUN=function(x){if(x > 0) return(x) else return(0);},numeric(1))
+
+		#Run multiple regression model comparing slow age with duration changing posture AND chronological time
+		spans$slow_group = cut(spans$slow_age, 3)
+		spans$Experiment= factor(as.character(spans$Experiment));
+		reg_pois = glm(dcp~Plate.Name.Exp+strata(slow_group),data=spans,family=quasipoisson())
+		reg_pois_resid = exp(residuals(reg_pois))
+		print("Changing Posture ~ Experiment + slow_age")
+		print(summary(reg_pois,test="F"))
+		print(anova(reg_pois,test="F"))
+		plot_ecdf_by_experiment(spans$dcp,spans,"Duration Moving Weakly");
+		plot_ecdf_by_experiment(reg_pois_resid,spans,"Residual Duration Moving Weakly");
+		#reg_pois = glm(dcp~Plate.Name.Exp,data=spans,family=quasipoisson())
+		#reg_pois_resid = residuals(reg_pois)
+		#plot_loess_residuals_by_experiment(spans$slow_age,reg_pois_resid,spans$Experiment,"Time spent moving quickly","Duration Moving Weakly");
+```
+
+
+```{r}
+#Fit a multiple regression model comparing duration changing posture and alive but not moving (i.e completely motionless)
+require(pscl) #because there are so many zeros, we use a zero-inflated poisson model.
+
+spans$alnm = vapply(spans$duration_alive_but_nonmoving,FUN=function(x){if(x > 0) return(floor(x*12)) else return(0);},numeric(1))
+#almn_reg_pois = glm(alnm~Plate.Name.Exp+slow_age,family=quasipoisson())
+almn_reg_pois = zeroinfl(alnm~Experiment+slow_age,data=spans,dist="negbin")
+alnm_reg_pois_resid = exp(residuals(almn_reg_pois))
+print("duration_alive_but_nonmoving ~ Experiment + slow_age")
+almn_reg_pois = zeroinfl(alnm~Experiment,data=spans,dist="negbin")
+alnm_reg_pois_resid = residuals(almn_reg_pois)
+print(summary(almn_reg_pois,test="F"))
+
+plot_ecdf_by_experiment(spans$alnm,spans,"Duration alive but completely still");
+title("Alive completely still")
+plot_ecdf_by_experiment(alnm_reg_pois_resid,spans,"Residual Duration Alive completely still");
+title("Alive completely still Residuals")
+plot_loess_residuals_by_experiment(spans$slow_age,alnm_reg_pois_resid,spans$Experiment,"Time spent moving quickly","Duration alive but completely still",y_max=6)
+```
+
+
+
+```{r}
+#load the results of cross-validation for the HMM model.
+#The cross-validation itself is performed using the worm browser software,
+#available on github.
+data_to_load = data.frame(name=c("20C"),
+			  filename = c("../data/training_test_results.csv.gz"),
+			  cross_validation_to_use = c("experiment"),
+			  survival_curve_split = c("Experiment.Bacteria"),
+			  death_marker = c("expansion")
+			  )
+			  
+survival_results_table = NULL;
+	
+n = dim(data_to_load)[1]		
+
+layout(matrix(1:(4*n),nrow=4,ncol=n))
+par(mar = c(4, 4, 2, 2))
+
+set_up_data = function(raw_data,cur_data){
+	raw_data = read.csv(cur_data$filename);
+	#browser()
+	raw_data = raw_data[raw_data$Cross.Validation.Info == cur_data$cross_validation_to_use,]
+	raw_data$Experiment.Strain = paste0(raw_data$Experiment,":",raw_data$Animal.Details)
+	raw_data$Experiment.Device = paste0(raw_data$Experiment,":",raw_data$Device)
+	raw_data$Bacteria.Type = "";
+	raw_data$Bacteria.Type[grep("UV",raw_data$Animal.Details)] = "UV";
+	raw_data$Bacteria.Type[grep("UV",raw_data$Animal.Details)] = "Live";
+	raw_data$Experiment.Bacteria = paste0(raw_data$Experiment,":",raw_data$Bacteria.Type)
+	raw_data = subset(raw_data,raw_data$Analysis.Approach != "strict_4D_S")
+	{
+		sum_res = aggregate(movement.cessation.Difference.Squared..Days.~Analysis.Approach,data=raw_data,FUN=mean)
+		sum_res = sum_res[order(sum_res$movement.cessation.Difference.Squared..Days.),]
+		sum_abs_res = aggregate(movement.cessation.Difference.Between.Machine.and.By.Hand.Event.Times..Days.~Analysis.Approach,data=raw_data,FUN=mean)
+		res = merge(sum_res,sum_abs_res,by="Analysis.Approach")
+		res = res[order (res$movement.cessation.Difference.Squared..Days.),]
+		print(res)
+		nn = 8;
+		if (length(sum_res$Analysis.Approach) < nn)
+			nn = length(sum_res$Analysis.Approach)
+		approach_to_use = sum_res$Analysis.Approach[1:nn]
+	}
+	{
+		sum_res = aggregate(death.associated.expansion.start.Difference.Squared..Days.~Analysis.Approach,data=raw_data,FUN=mean)
+		sum_res = sum_res[order(sum_res$death.associated.expansion.start.Difference.Squared..Days.),]
+		sum_abs_res = aggregate(death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days.~Analysis.Approach,data=raw_data,FUN=mean)
+		res = merge(sum_res,sum_abs_res,by="Analysis.Approach")
+		res = res[order (res$death.associated.expansion.start.Difference.Squared..Days.),]
+		print(res)
+		nn = 8;
+		if (length(sum_res$Analysis.Approach) < nn)
+			nn = length(sum_res$Analysis.Approach)
+		approach_to_use = sum_res$Analysis.Approach[1:nn]
+	}
+	if (cur_data$death_marker[1] == "expansion"){
+		r = subset(raw_data,raw_data$Analysis.Approach %in% approach_to_use & !is.na(raw_data$death.associated.expansion.start.Difference.Squared..Days.))
+		r$Analysis.Approach = factor(as.character(r$Analysis.Approach))
+		r$dth = r$death.associated.expansion.start.time.by.hand..days.;
+		r$dtm = r$death.associated.expansion.start.time.by.machine..days.
+		r$fs = r$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days/r$death.associated.expansion.start.time.by.hand..days.;
+	}else{
+		r = subset(raw_data,raw_data$Analysis.Approach %in% approach_to_use & !is.na(raw_data$movement.cessation.Difference.Between.Machine.and.By.Hand.Event.Times..Days.))
+		r$Analysis.Approach = factor(as.character(r$Analysis.Approach))
+		r$dth = r$movement.cessation.time.by.hand..days.;
+		r$dtm = r$movement.cessation.time.by.machine..days.;
+		r$fs = r$movement.cessation.Difference.Between.Machine.and.By.Hand.Event.Times..Days./r$movement.cessation.time.by.hand..days.;
+	}
+	return(list(approach_to_use = approach_to_use,r=r));
+
+}
+
+make_transparent = function(x,alpha){
+	m = col2rgb(x)/255;
+	return(rgb(m[1,],m[2,],m[3,],alpha));
+}
+
+```
+
+```{r}
+#analyze and plot the results of cross validation of the HMM model
+for (i in 1:(dim(data_to_load)[1])){
+	cur_data = data_to_load[i,];
+	cur_data$death_marker = "expansion"
+	res = set_up_data(raw_data,cur_data)
+	r = res[["r"]];
+	approach_to_use = res[["approach_to_use"]]
+	plt = T
+	#plot different approaches
+	colors = make_transparent(c("red","blue","green","orange","purple","cyan","brown"),.5)
+	#par(mfrow=c(2,2))
+	for (a in approach_to_use){
+		rr = subset(r,r$Analysis.Approach == a)
+		plot(ecdf(abs(rr$fs)),add=!plt,col=colors[which(a==approach_to_use)],xaxt="n",verticals=T,pch=NA,lwd=2,main=NULL,xlim=c(0,quantile(abs(r$fs),.98)),ylab="cdf",xlab="Machine Error (Fraction Lifespan)")
+		axis(1,at=seq(-.1,.1,.01))
+		plt=F
+		#browser()
+		m = r[r$Analysis.Approach == a,]
+		m$d_sq = m$death.associated.expansion.start.Difference.Squared..Days.
+		m = m[order(m$d_sq,decreasing =T),]
+		print(m[1:5,c("Experiment","Plate.Name","Group.ID","d_sq","death.associated.expansion.start.time.by.hand..days.","death.associated.expansion.start.time.by.machine..days.")])
+	}
+	legend("bottomright",title=paste0(cur_data$name,":",cur_data$death_marker),legend=approach_to_use,col=colors,lty=1,bty="n")
+	#browser()
+	#
+	#plot best approach
+	approach = approach_to_use[1]
+	abline(v=0,lty=2,col="gray")
+	plt = T
+	#rng = quantile(r$fs,c(.01,.99))
+	rng = c(-.15,.15)
+	single_approach_data = subset(r,r$Analysis.Approach == approach);
+	plot(ecdf(single_approach_data$fs),add=!plt,col="red",verticals=T,xaxt="n",pch=NA,lwd=2,main=NULL,xlim=rng,xlab=cur_data$death_marker)
+	axis(1,at=seq(rng[1],rng[2],.01))
+	legend("bottomright",legend=approach,lty=1,col="red",bty="n")
+	plt=F
+	abline(v=0,lty=2,col="gray")	#plot error accross various subgroups
+	#print(paste("Absolute median",median(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days.)))
+	#print(paste("Absolute Squared median",median(single_approach_data$death.associated.expansion.start.Difference.Squared..Days.)))
+	print(paste("Absolute sqare-root Squared mean",sqrt(mean(single_approach_data$death.associated.expansion.start.Difference.Squared..Days.))))
+	print(paste("Absolute sqare-root Squared stdev",sd(single_approach_data$death.associated.expansion.start.Difference.Squared..Days.)))
+	print(paste("Fraction abs ",mean(abs(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.))))
+	print(paste("Fraction abs stdev",sd(abs(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.))))
+	print(paste("Fraction",sd(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.)))
+	print(quantile(abs(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.),c(.9,.95,.98,.99,.999)))
+
+
+	print(aggregate(death.associated.expansion.start.identified.by.hand.~Experiment,single_approach_data,FUN=length))
+	print(aggregate(death.associated.expansion.start.Difference.Squared..Days.~Experiment,single_approach_data,FUN=mean))
+	print(aggregate(single_approach_data$death.associated.expansion.start.time.by.hand..days.~Experiment,single_approach_data,FUN=mean))
+	
+	print(aggregate(death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days.~Experiment,single_approach_data,FUN=sd))
+	single_approach_data$frac_error = single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.
+	print(aggregate(frac_error~Experiment,single_approach_data,FUN=mean))
+	print(aggregate(frac_error~Experiment,single_approach_data,FUN=sd))
+	
+
+	print(paste("Fraction sqrt squared stdev",sd(single_approach_data$death.associated.expansion.start.Difference.Between.Machine.and.By.Hand.Event.Times..Days./single_approach_data$death.associated.expansion.start.time.by.hand..days.)))
+	
+	
+	
+	res = aggregate(death.associated.expansion.start.Difference.Squared..Days.~Cross.Validation.Replicate.ID,data=single_approach_data,FUN=mean)
+	plt = T
+	colors = c("red","blue","green","orange","purple");
+	
+	rng = c(0,.2)
+	replicate_ids_to_use = unique(r$Cross.Validation.Replicate.ID)
+	for (repl in replicate_ids_to_use){
+		rr = subset(single_approach_data,single_approach_data$Cross.Validation.Replicate.ID == repl)
+		plot(ecdf(abs(rr$fs)),add=!plt,col=colors[which(repl==replicate_ids_to_use)],verticals=T,xlim=quantile(abs(r$fs),c(.005,.997)),,xaxt="n",pch=NA,lwd=2,main=NULL,ylab="cdf",,xlab="Machine Error (Fraction Lifespan)")
+		axis(1,at=seq(rng[1],rng[2],.02))
+		plt=F
+	}
+	abline(v=0,lty=2,col="gray")
+	
+	plot(single_approach_data$dth,single_approach_data$dtm,pch=19,col=rgb(0,0,0,.5));
+	lmod = lm(dtm~dth,data=single_approach_data);
+	x = seq(rng[1],rng[2],by=.1);
+	lines(single_approach_data$dth,predict(lmod,data=single_approach_data),col="red",lty=1)
+	print(summary(lmod))
+	#
+}
+```
+
+```{r}
+#Analyze and plot the cross-validation results of the HMM model separately for each experiment, to look for any systematic differences in performance.
+n=16
+layout(matrix(1:n,nrow=4,ncol=n/4))
+par(mar = c(3, 4, 2, 2))
+for (i in 1:(dim(data_to_load)[1])){
+	cur_data = data_to_load[i,];
+	res = set_up_data(raw_data,cur_data)
+		r = res[["r"]];
+	approach_to_use = res[["approach_to_use"]]
+
+	single_approach_data = subset(r,r$Analysis.Approach == approach_to_use[1]);
+	
+	single_approach_data$group = single_approach_data[,cur_data$survival_curve_split]
+	colors=rainbow(length(unique(single_approach_data$group)));
+	xlims = range(c(range(single_approach_data$dtm),range(single_approach_data$dth)));
+	#plot(c(),c(),xlim=xlims,ylim=c(0,1))
+	
+	exps = unique(single_approach_data$group);
+	for (ex in exps){
+		re = subset(single_approach_data,single_approach_data$group == ex);
+		num_deaths = length(which(re$Censored==0));
+		if (num_deaths < 25)
+			next;
+		plot(survfit(Surv(re$dth)~re$group),col=rgb(0,0,0,.5),conf.int=F,lwd=2,xlim=c(0,xlims[2]),ylab="Fraction Surviving",xlab="Age (days)")
+		lines(survfit(Surv(re$dtm)~re$group),col=rgb(1,0,0,.5),conf.int=F,lty=1,lwd=2);
+	
+	
+		rel = data.frame(t=c(re$dth,re$dtm),
+				 measurement = c(rep("hand",length(re$dth)),
+						 rep("machine",length(re$dtm))
+						 )
+				 );
+		d = survdiff(Surv(rel$t)~rel$measurement)
+		pv = pchisq(d$chisq, df=1, lower.tail=FALSE);
+		survival_results_table = rbind(data.frame(name = cur_data$name,group=ex,pv=pv,N=num_deaths),survival_results_table);
+		#browser()
+		legend("bottomright",title=paste(cur_data$name,"\n",ex),legend=c("By Hand","Machine"),col=c("black","red"),bty='n',lty=1)
+	}
+}
+print(survival_results_table)
+
+```

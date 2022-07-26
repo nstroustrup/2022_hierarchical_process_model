@@ -1,0 +1,456 @@
+```{r}
+#source("../shared_scripts/ns_multistate_basics.r")
+library(devtools)
+library(survival)
+if (!("ns.survival.code" %in% rownames(installed.packages())))
+  install_github("nstroustrup/ns.survival.code");
+library(ns.survival.code)
+library("wesanderson")
+library("Hmisc")
+library("bshazard")
+library("rms")
+
+```
+
+
+```{r}
+#load data for auxin rbp-2::AID experiment
+spans = read.csv("../data/all_spans.csv.gz");
+
+```
+
+```{r}
+#set up to analyze the AMP100 (rbp-2::degron) experiment
+  spans2 = spans[spans$Experiment == "AMP100_Dosage_Series",]
+  spans2$group[spans2$group == "wildtype UV-inactivated 20C"] = "0mM"
+  spans2$kna_concentration = as.numeric(substring(spans2$group,0,nchar(as.character(spans2$group))-2))
+  concentrations = unique(spans2$kna_concentration[spans2$kna_concentration <= 10])
+  concentrations = concentrations[concentrations != 0]
+	layout(matrix(c(1,2), 1, 2))
+	colors = wes_palette("Zissou1", length(concentrations), type = "continuous")
+	srv = survfit(Surv(expansion,status)~group,spans2)
+	plot(srv,col=c("black",colors),lwd=2,xaxt='n')
+	axis(1,at=seq(0,40,4))
+	axis(1,at=seq(0,40,2),lab=NA)
+	spans2$Age.at.Death..d..Raw = spans2$expansion
+```
+
+
+```{r}
+#plot survival and hazard
+ns_plot_colored_hazard_by_groups(spans2,"group",colors = c("black",colors),second_style_column=NA,style_line_thickness=2,plot_ci=F,xlim=c(2.5,35),ylim=c(.035,1.5),khaz_span=20,logx=T,
+			plot_percentile_limits=c(.02,.99),x_axis_tick=c(2.5,3,4,5,7.5,seq(10,40,5)),y_axis_tick=c(.025,.05,.075,.1,.25,.5,.75,1,1.5))
+
+
+```
+
+```{r}
+#calculate AFT models linking vigorous movement to lifespan across auxin concentrations, then plot and fit them.
+
+#	windows(height=7.5,width=15)
+layout(matrix(c(1:4), 2, 2))
+#colors=rainbow();
+#	concentrations = unique(survival_data$kna_concentration[survival_data$kna_concentration <= 10])
+colors = wes_palette("Zissou1", length(concentrations), type = "continuous")
+#rmp = colorRampPalette(c("black","red","blue"));
+#colors = rmp(length(unique(concentrations)));
+#res_expansion = aft_device_normalization(spans2,"expansion","status","group","Plate.Name")
+#res_slow = aft_device_normalization(spans2,"slow_age","status","group","Plate.Name")
+#res_slow[res_slow<=0] = min(res_slow[res_slow>0]/2)
+results = NULL
+for (typ in 1:2){
+	#plot(survfit(Surv(res_slow)~spans2$group),col=colors)
+	spans_c = spans2;
+	spans_c$group = spans_c$kna_concentration
+	spans_c$slow_age[spans_c$slow_age<=0] = min(spans_c$slow_age[spans_c$slow_age>0]/2)
+	if (typ == 1){
+		sp = spans_c$expansion
+		spans_c[sp<=0] = min(sp[sp>0]/2)
+		sub = rep(T,length(sp));
+		sm_span = .9
+		ylab = "Lifespan"
+		draw_vertical=F
+	}else if (typ == 2){
+		sp = spans_c$expansion - spans_c$slow_age;
+		sub = rep(T,length(sp));
+		spans_c$status[sp<=0] = 0;
+		sp[sp<=0] = min(sp[sp>0]/2)
+		sm_span=.8
+		ylab = "Time spent weak or non-moving (Clock Reset)"
+		draw_vertical=T
+	}
+	slow_aft=ns_single_bj_group(Surv(spans_c$slow_age[sub],spans_c$status[sub])~spans_c$group[sub],reference_group="0");
+	expansion_aft=ns_single_bj_group(Surv(sp[sub],spans_c$status[sub])~spans_c$group[sub],reference_group="0");
+
+	r = merge(slow_aft$coefficients,expansion_aft$coefficients,by="bj_group",suffixes=c(".slow",".expansion"))
+	r$cmp = ylab;
+	results = rbind(r,results)
+	rng = range(exp(c(r$lower.expansion,r$upper.expansion,r$lower.slow,r$upper.slow)))
+	
+	x_rng = c(.003,8.5)
+	
+	slow_c = slow_aft$coefficients
+	expan_c = expansion_aft$coefficients
+	plot(c(),c(),type="n",xlim=x_rng,ylim=rng,ylab="Scale Factor",xlab="[KNA]",cex=1.5,log="x")
+	for(i in 1:(dim(slow_c)[1])) 
+		lines(rep(as.numeric(slow_c$bj_group[i]),2)*.99,exp(c(slow_c$lower[i],slow_c$upper[i])),col=colors[i])
+	for(i in 1:(dim(expan_c)[1]))
+		lines(rep(as.numeric(expan_c$bj_group[i]),2)*1.01,exp(c(expan_c$lower[i],expan_c$upper[i])),col=colors[i])
+	points(as.numeric(slow_c$bj_group),exp(slow_c$coefficient),bg=colors,col=colors,ylab="Scale Factor",xlab="[KNA]",pch=21,cex=1)
+	points(as.numeric(expan_c$bj_group),exp(expan_c$coefficient),bg="#FFFFFF",col=colors,pch=23,cex=1)
+	
+	
+	#now plot vigorous vs lifespan
+	plot(exp(r$coefficient.slow),exp(r$coefficient.expansion),xlim=rng,ylim=rng,bg=colors,col=colors,ylab=ylab,xlab="Scaling of Quick Movement",pch=21,cex=1.5,log="xy")
+	points(0,0,pch=1,bg="black",col="black")
+	for(i in 1:length(r$se.expansion)){
+		lines(exp(c(r$lower.slow[i],r$upper.slow[i])),exp(rep(r$coefficient.expansion[i],2)),col=colors[i])
+		lines(exp(rep(r$coefficient.slow[i],2)),exp(c(r$lower.expansion[i],r$upper.expansion[i])),col=colors[i])
+		#text(r$coefficient.slow[i],r$coefficient.expansion[i],r$bj_group[i])
+	}
+	abline(a=0,b=1,col="blue",lty=2)
+	#abline(v=mean(r$coefficient.slow[as.numeric(r$bj_group) <= 1 & as.numeric(r$bj_group)>= .125]),col="gray",lty=1)
+	lmr= lm(coefficient.expansion~coefficient.slow,data=r)
+	lmr_ci=predict(lmr,interval="confidence",level = 0.95)
+	#lines(r$coefficient.expansion,lmr_ci[,1],col="red")
+	#polygon(c(r$coefficient.expansion,rev(r$coefficient.expansion),r$coefficient.expansion[1]),c(lmr_ci[,2],rev(lmr_ci[,3]),lmr_ci[1,2]),col=rgb(1,0,0,.1),border=NA)#lines(r$coefficient.expansion,lmr_ci[,3],col="red",lty=2)
+	#plot(survfit(Surv(slow_age)~group,data=spans),col=colors)
+	#plot(survfit(Surv(expansion)~group,data=spans),col=colors)
+	#ns_plot_multistate_muligroup_flexsurv_model(flex_fits[["hazard"]],"clock_forward",colors);
+	#ns_plot_multistate_muligroup_flexsurv_model(flex_fits[["hazard"]],"clock_reset");
+	
+	if (dim(r)[1]>2){
+		subs = list()
+		subs[[1]] = as.numeric(r$bj_group) >= .25
+		subs[[2]] = as.numeric(r$bj_group) <= 1 & as.numeric(r$bj_group) >= .062
+		subs[[3]] = as.numeric(r$bj_group) <= .125
+		for (j in 1:3){
+			rr = r[subs[[j]],];
+			#browser()
+			lm1 = lm(coefficient.expansion~coefficient.slow,data=rr);
+			
+			print(summary(lm1))
+			
+			x = range(rr$coefficient.slow);
+			#x = c(x[1]*1.05,x[2]*.95)
+			lines(exp(x),exp(predict(lm1,data.frame(coefficient.slow=x))),lwd=2,col="#999999")
+		}
+	}
+	
+	
+	#lss = loess(coefficient.expansion~coefficient.slow,data=r,span=sm_span)
+	#lx_x = seq(rng[1],rng[2],length.out=100)
+	#lx_y = predict(lss,newdata=data.frame(coefficient.slow=lx_x))
+	#lines(lx_x,lx_y,col="black",lwd=2)
+	legend("topleft",title="[KNA]",legend=r$bj_group,col=colors,pch=19,bty="n",cex=.8)
+}
+
+
+library(boot)
+slp <- function(formula, data, indices) {
+  d <- data[indices,] # allows boot to select sample
+  fit <- lm(formula, data=d)
+  #browser()
+  return(summary(fit)$coefficients[,1])
+} 
+#results <- boot(data=r, statistic=slp,R=1000, formula=coefficient.expansion~coefficient.slow)
+#boot.ci(results,index=1)
+
+```
+
+```{r}
+source("../shared_scripts/ns_estimate_dS_and_dR.r")
+#Estimate d mu S and dRf parameters drift diffusion proportionate / disproportionate model.  see supplementary note 5 for details
+concentrations_to_compare = unique(spans2$kna_concentration);
+D = concentrations_to_compare[!concentrations_to_compare %in% c(0)]
+results = NULL;
+for (cur_conc in concentrations_to_compare){
+	sp = subset(spans2,spans2$kna_concentration %in% c(0,cur_conc));
+	sp$slow_age[sp$slow_age<=0] = min(sp$slow_age[sp$slow_age>0]/2) 
+	sp$group = factor(sp$kna_concentration,levels=c(0,cur_conc))
+	ref = "0"
+	
+  result = ns_estimate_dS_and_dR(sp,device_column=NULL,ref_group = ref);
+  
+  result$coefficients$kna_concentration = cur_conc;
+	results = rbind(result$coefficients,results)
+}
+
+```
+
+```{r}
+#Plot the results ofd mu S and dRf fits
+res1 = results[results$var=="dS",]
+res2 = results[results$var=="dR",]
+res = merge(res1,res2,by=c("kna_concentration"),suffixes=c("_dS","_dR"))
+
+conditions = as.character(unique(concentrations_to_compare));
+conditions = conditions[order(as.numeric(conditions))]
+N= length(conditions)
+colors = wes_palette("Zissou1", length(concentrations_to_compare), type = "continuous")
+names(colors) = conditions
+all_pch = c(21:25,21:25,21:25,21:25)
+pch = all_pch[1:N]
+names(all_pch) = conditions
+edge_col = "black"
+	cex = 2
+	mt = match(as.character(res$kna_concentration),conditions)
+for (j in 1:2){
+  if(j==2)pdf("dR_dS_auxin_AMP100.pdf",width=7,height=4)
+  plot(exp(res$coefficient_dS),exp(res$coefficient_dR),col=edge_col,bg=colors[mt],pch=21,xlim=c(1,6),ylim=c(.8,1.2),cex=cex,log="xy",xlab="Delta Shared",ylab="Delta Separate")
+  for (i in 1:N){
+    lines(exp(c(res$lower_dS[i],res$upper_dS[i])),exp(rep(res$coefficient_dR[i],2)),col=colors[mt[i]])
+    lines(exp(rep(res$coefficient_dS[i],2)),exp(c(res$lower_dR[i],res$upper_dR[i])),col=colors[mt[i]])
+    if (abs(res$coefficient_dR[i])>log(1.25)) text(exp(res$coefficient_dS[i]+.4),exp(res$coefficient_dR[i]),res$group[i])
+  }
+  reg1 = lm(coefficient_dR~coefficient_dS,res[res$kna_concentration<=.187,])
+  reg2 = lm(coefficient_dR~coefficient_dS,res[res$kna_concentration>=.325,])
+  x = seq(min(res$coefficient_dS),max(res$coefficient_dS),length.out=4);
+  lines(exp(x),exp(predict(reg1,newdata=data.frame(coefficient_dS=x))));
+  lines(exp(x),exp(predict(reg2,newdata=data.frame(coefficient_dS=x))));
+  legend("topright",legend=conditions,pch=pch,col=colors,pt.bg=colors,bty="n",lty=2)
+  abline(h=1,lty=2,col="#888888")
+  abline(v=1,lty=2,col="#888888")
+  if (j==2)dev.off();
+}
+
+```
+
+```{r}
+  #set up to analyze the control strain CA1200 
+  spans3 = spans[spans$Experiment == "CA1200_AMP100_dosage",]
+  spans3$kna_concentration = as.numeric(substring(spans3$group,7,nchar(as.character(spans3$group))-3))
+  spans3$strain = substring(spans3$group,0,6)
+  concentrations = unique(spans3$kna_concentration)
+  concentrations = concentrations[concentrations != 0]
+	layout(matrix(c(1,2), 1, 2))
+	colors = wes_palette("Zissou1", length(concentrations), type = "continuous")
+	srv = survfit(Surv(expansion,status)~group,spans3)
+	plot(srv,col=c("black",colors),lwd=2,xaxt='n')
+	axis(1,at=seq(0,40,4))
+	axis(1,at=seq(0,40,2),lab=NA)
+
+```
+
+```{r}
+#Analyze the control experiment testing the effect of auxin dosage on the auxin non-response CA1200 strain.
+
+#	windows(height=7.5,width=15)
+#layout(matrix(c(1:4), 2, 2))
+#colors=rainbow();
+#	concentrations = unique(survival_data$kna_concentration[survival_data$kna_concentration <= 10])
+colors = wes_palette("Zissou1", length(concentrations), type = "continuous")
+#rmp = colorRampPalette(c("black","red","blue"));
+#colors = rmp(length(unique(concentrations)));
+#res_expansion = aft_device_normalization(spans3,"expansion","status","group","Plate.Name")
+#res_slow = aft_device_normalization(spans3,"slow_age","status","group","Plate.Name")
+#res_slow[res_slow<=0] = min(res_slow[res_slow>0]/2)
+results = NULL
+for(ii in 1:2){
+  if (ii == 1)
+    pdf("controL_auxin_dosage.pdf",width=10,height=5)
+for (typ in 1:2){
+	#plot(survfit(Surv(res_slow)~spans3$group),col=colors)
+	spans_c = spans3;
+	spans_c$kna_concentration = spans_c$kna_concentration/1000
+	spans_c$group = spans_c$kna_concentration
+	spans_c$slow_age[spans_c$slow_age<=0] = min(spans_c$slow_age[spans_c$slow_age>0]/2)
+	
+	add=F
+	strains = unique(spans_c$strain);
+	reg_models = list()
+	coeff_range = c();
+	for (strain in strains){
+	    spans_c2 = spans_c[spans_c$strain == strain,]
+	    if (typ == 1){
+    		sp = spans_c2$expansion
+    		spans_c2[sp<=0] = min(sp[sp>0]/2)
+    		sub = rep(T,length(sp));
+    		sm_span = .9
+    		ylab = "Lifespan"
+    		draw_vertical=F
+    	}else if (typ == 2){
+    		sp = spans_c2$expansion - spans_c2$slow_age;
+    		sub = rep(T,length(sp));
+    		spans_c2$status[sp<=0] = 0;
+    		sp[sp<=0] = min(sp[sp>0]/2)
+    		sm_span=.8
+    		ylab = "Time spent weak or non-moving (Clock Reset)"
+    		draw_vertical=T
+    	}
+    	slow_aft=ns_single_bj_group(Surv(spans_c2$slow_age[sub],spans_c2$status[sub])~spans_c2$group[sub],reference_group="0");
+    	expansion_aft=ns_single_bj_group(Surv(sp[sub],spans_c2$status[sub])~spans_c2$group[sub],reference_group="0");
+    
+    	r = merge(slow_aft$coefficients,expansion_aft$coefficients,by="bj_group",suffixes=c(".slow",".expansion"))
+    	r$cmp = ylab;
+    	r$typ = typ
+    	r$strain = strain;
+    	results = rbind(r,results)
+    	coeff_range = range(exp(c(r$lower.expansion,r$upper.expansion,r$lower.slow,r$upper.slow)),coeff_range)
+	}
+	for (strain in strains){
+	    r = reg_models[[strain]];
+    	x_rng = c(.003,8.5)
+    	
+    	res_c = results[results$strain == strain,]
+    	if (add==F){ plot_f = plot;
+    	}else plot_f = lines;
+    	plot_f(c(),c(),type="n",xlim=x_rng,ylim=coeff_range,ylab="Scale Factor",xlab="[KNA]",cex=1.5,log="x")
+    	add=T
+    	for(i in 1:(dim(slow_c)[1])) 
+    		lines(rep(as.numeric(res_c$bj_group[i]),2)*.99,exp(c(res_c$lower.slow[i],res_c$upper.slow[i])),col=colors[i])
+    	for(i in 1:(dim(expan_c)[1]))
+    		lines(rep(as.numeric(res_c$bj_group[i]),2)*1.01,exp(c(res_c$lower.expansion[i],res_c$upper.expansion[i])),col=colors[i])
+    	pch = 21 + which(strain==strains)-1;
+    	points(as.numeric(res_c$bj_group),exp(res_c$coefficient.slow),bg=colors,col=colors,ylab="Scale Factor",xlab="[KNA]",pch=pch,cex=1)
+    	points(as.numeric(res_c$bj_group),exp(res_c$coefficient.expansion),bg="#FFFFFF",col=colors,pch=pch+2,cex=1)
+	}
+	
+	
+	#now plot vigorous vs lifespan
+	add=F
+	for (strain in strains){
+	    r = results[results$strain == strain & results$typ == typ,]
+	  	pch = 21 + which(strain==strains)-1;
+	  	if (add==F){ plot_f = plot;
+    	}else plot_f = points;
+    	plot_f(exp(r$coefficient.slow),exp(r$coefficient.expansion),xlim=coeff_range,ylim=coeff_range,bg=colors,col=colors,ylab=ylab,xlab="Scaling of Quick Movement",pch=pch,cex=1.5,log="xy")
+  	  add = T;
+  	  
+  	points(0,0,pch=1,bg="black",col="black")
+  	points(0,0,pch=2,bg="black",col="black")
+  	for(i in 1:length(r$se.expansion)){
+  		lines(exp(c(r$lower.slow[i],r$upper.slow[i])),exp(rep(r$coefficient.expansion[i],2)),col=colors[i])
+  		lines(exp(rep(r$coefficient.slow[i],2)),exp(c(r$lower.expansion[i],r$upper.expansion[i])),col=colors[i])
+  		#text(r$coefficient.slow[i],r$coefficient.expansion[i],r$bj_group[i])
+  	}
+  	abline(a=0,b=1,col="blue",lty=2)
+  	 	if (1){
+  	#abline(v=mean(r$coefficient.slow[as.numeric(r$bj_group) <= 1 & as.numeric(r$bj_group)>= .125]),col="gray",lty=1)
+  	lmr= lm(coefficient.expansion~coefficient.slow,data=r)
+  	lmr_ci=predict(lmr,interval="confidence",level = 0.95)
+  	#lines(r$coefficient.expansion,lmr_ci[,1],col="red")
+  	#polygon(c(r$coefficient.expansion,rev(r$coefficient.expansion),r$coefficient.expansion[1]),c(lmr_ci[,2],rev(lmr_ci[,3]),lmr_ci[1,2]),col=rgb(1,0,0,.1),border=NA)#lines(r$coefficient.expansion,lmr_ci[,3],col="red",lty=2)
+  	#plot(survfit(Surv(slow_age)~group,data=spans),col=colors)
+  	#plot(survfit(Surv(expansion)~group,data=spans),col=colors)
+  	#ns_plot_multistate_muligroup_flexsurv_model(flex_fits[["hazard"]],"clock_forward",colors);
+  	#ns_plot_multistate_muligroup_flexsurv_model(flex_fits[["hazard"]],"clock_reset");
+ 
+    	if (dim(r)[1]>2){
+    		subs = list()
+    		subs[[1]] = as.numeric(r$bj_group) >= .25
+    		subs[[2]] = as.numeric(r$bj_group) <= 1 & as.numeric(r$bj_group) >= .062
+    		subs[[3]] = as.numeric(r$bj_group) <= .125
+    		for (j in 1:3){
+    			rr = r[subs[[j]],];
+    			#browser()
+    			lm1 = lm(coefficient.expansion~coefficient.slow,data=rr);
+    			
+    			print(summary(lm1))
+    			
+    			x = range(rr$coefficient.slow);
+    			#x = c(x[1]*1.05,x[2]*.95)
+    			lines(exp(x),exp(predict(lm1,data.frame(coefficient.slow=x))),lwd=2,col="#999999")
+    			abline(v=1,lwd=2,col="#999999")
+    		}
+    	}
+  	 }
+  	
+  	
+  	#lss = loess(coefficient.expansion~coefficient.slow,data=r,span=sm_span)
+  	#lx_x = seq(rng[1],rng[2],length.out=100)
+  	#lx_y = predict(lss,newdata=data.frame(coefficient.slow=lx_x))
+  	#lines(lx_x,lx_y,col="black",lwd=2)
+  	legend("topleft",title="[KNA]",legend=r$bj_group,col=colors,pch=19,bty="n",cex=.8)
+	}
+}
+ if (ii == 1) dev.off();
+}
+
+library(boot)
+slp <- function(formula, data, indices) {
+  d <- data[indices,] # allows boot to select sample
+  fit <- lm(formula, data=d)
+  #browser()
+  return(summary(fit)$coefficients[,1])
+} 
+#results <- boot(data=r, statistic=slp,R=1000, formula=coefficient.expansion~coefficient.slow)
+#boot.ci(results,index=1)
+
+```
+
+```{r}
+source("../shared_scripts/ns_estimate_dS_and_dR.r")
+#Estimate d mu S and dRf parameters drift diffusion proportionate / disproportionate model.  see supplementary note 5 for details
+concentrations_to_compare = unique(spans3$kna_concentration);
+concentrations_to_compare = concentrations_to_compare[!concentrations_to_compare %in% c(0)]
+results2 = NULL;
+for (cur_conc in concentrations_to_compare){
+	for (strain in unique(spans3$strain)){
+  	sp = spans3[(spans3$kna_concentration %in% c(0,cur_conc)) & spans3$strain == strain,];
+  
+  	if (length(which(cur_conc == sp$kna_concentration)) < 50){print(paste(strain,cur_conc,"has too few individuals"));next;}#remove conditions with too few individuals
+  #	print(dim(sp))
+  	sp$slow_age[sp$slow_age<=0] = min(sp$slow_age[sp$slow_age>0]/2)
+  	sp$group = factor(sp$kna_concentration,levels=c(0,cur_conc))
+  	ref = "0"
+  	
+    result = ns_estimate_dS_and_dR(sp,device_column=NULL,ref_group = ref);
+    
+    result$coefficients$kna_concentration = cur_conc;
+    result$coefficients$strain = strain;
+  	results2 = rbind(result$coefficients,results2)
+  }
+}
+res1 = results2[results2$var=="dS",]
+res2 = results2[results2$var=="dR",]
+res_all = merge(res1,res2,by=c("strain","kna_concentration"),suffixes=c("_dS","_dR"))
+
+```
+
+
+```{r}
+#Plot the results ofd mu S and dRf fits
+
+concentrations_to_compare = unique(res_all$kna_concentration);
+conditions = as.character(unique(concentrations_to_compare));
+conditions = conditions[order(as.numeric(conditions))]
+N= length(conditions)
+colors = wes_palette("Zissou1", length(concentrations_to_compare), type = "continuous")
+names(colors) = conditions
+all_pch = c(21:25,21:25,21:25,21:25)
+pch = all_pch[1:N]
+names(all_pch) = conditions
+edge_col = "black"
+	cex = 2
+for (j in 1:2){
+ if(j==2)pdf("dR_dS_auxin_CA1200.pdf",width=7,height=4)
+	strains = unique(res_all$strain)
+  for (strain in strains){
+    res = res_all[res_all$strain == strain,];
+	  mt = match(as.character(res$kna_concentration),conditions)
+	  plot_f=plot
+	  if (which(strain == strains) != 1)plot_f = points
+    plot_f(exp(res$coefficient_dS),exp(res$coefficient_dR),col=edge_col,bg=colors[mt],pch=21+which(strain!=strains)-1,
+           cex=cex,log="xy",xlab="Delta Shared",ylab="Delta Separate",ylim=exp(range(c(res_all$lower_dR,res$upper_dR))),xlim=exp(range(res_all$lower_dS,res$upper_dS)))
+    for (i in 1:length(res$lower_dS)){
+      lines(exp(c(res$lower_dS[i],res$upper_dS[i])),exp(rep(res$coefficient_dR[i],2)),col=colors[mt[i]])
+      lines(exp(rep(res$coefficient_dS[i],2)),exp(c(res$lower_dR[i],res$upper_dR[i])),col=colors[mt[i]])
+      if (abs(res$coefficient_dR[i])>log(1.25)) text(exp(res$coefficient_dS[i]+.4),exp(res$coefficient_dR[i]),res$group[i])
+    }
+    if (0){
+      reg1 = lm(coefficient_dR~coefficient_dS,res[res$kna_concentration<=.187,])
+      reg2 = lm(coefficient_dR~coefficient_dS,res[res$kna_concentration>=.325,])
+      x = seq(min(res$coefficient_dS),max(res$coefficient_dS),length.out=4);
+      lines(exp(x),exp(predict(reg1,newdata=data.frame(coefficient_dS=x))));
+      lines(exp(x),exp(predict(reg2,newdata=data.frame(coefficient_dS=x))));
+    }
+  }
+    legend("topright",legend=conditions,pch=pch,col=colors,pt.bg=colors,bty="n",lty=2)
+    abline(h=1,lty=2,col="#888888")
+    abline(v=1,lty=2,col="#888888")
+    if (j==2)dev.off();
+    
+}
+
+```

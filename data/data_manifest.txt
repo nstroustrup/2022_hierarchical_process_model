@@ -1,0 +1,6 @@
+all_spans.csv: the vigorous movement cessation, movement cessation, and lifespan of all individuals in all conditions
+by_hand_training_set_spans.csv.gz: the by-hand annotated set of vigorous movement cessation, movement cessation, and death times used to train and test the HMM model (in some places named 2020_09_18=20C_posture=by_hand_only=abr.csv.gz )
+experiment_metadata.csv: annotations describing each experiment used to build and train HMM models--ie. the data in training_set.csv
+control_metadata.csv: annotations describing each experiment used in the manuscript
+training_test_results.csv.gz: Results of cross validation of the HMM model against test (in some places named 2020_06_09=20C_hmm=hmm_performance=all_experiments=HMM Wildtype.csv.gz)
+glm_all_results=big_run2.csv: Glm model parameter estimates for all groups.

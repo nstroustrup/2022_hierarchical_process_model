@@ -1,0 +1,814 @@
+```{r}
+library(rms)
+library(RColorBrewer)
+library(devtools)
+library(reshape2)
+library(flexsurv)
+if (!("ns.survival.code" %in% rownames(installed.packages())))
+  install_github("nstroustrup/ns.survival.code");
+library(ns.survival.code)
+
+
+ns_rms_contrasts_to_data_frame = function(rms_data,group_names){
+	res = matrix(unlist(rms_data[2:7]),ncol=6)
+	colnames(res) = c("coefficient", "se", "lower", "upper", "Z", "p")
+	res = as.data.frame(res)
+	res = res[,names(res) != "Z"]
+	res$bj_group = group_names;
+	return(res);
+}
+
+```
+
+
+```{r}
+#load all the movement and lifespan data
+spans = read.csv("../data/all_spans.csv.gz");
+experiments = unique(spans$Experiment)
+#files including the rpb-2::AID dosage series, which we process separately
+amp100_files = c("AMP100_Dosage_Series","CA1200_AMP100_dosage");
+
+```
+
+```{r}
+#fit AFT models to each control and intervention pair, and save them to disk.
+
+aft_estimates = NULL;
+
+experiments_to_plot = experiments;
+
+for (ex in experiments_to_plot){
+	sp = subset(spans,spans$Experiment == ex  & spans$expansion != 0 & spans$slow_age != 0);
+	
+	sp$group = factor(sp$group)
+	groups = unique(sp$group)
+
+	ref = sp$group[sp$control==1][1];
+	
+	sp$after_slow = sp$expansion - sp$slow_age
+	sp$after_slow[sp$after_slow <= 0] = min(sp$after_slow[sp$after_slow > 0])
+	sp$non_moving = sp$expansion - sp$movement_cessation
+	sp$non_moving[sp$non_moving <= 0] = min(sp$non_moving[sp$non_moving > 0])
+  if (length(groups)==1)
+    next;
+	#we need to see if we can run multiple regression to simultaneously model
+	#device and intervention effects.
+	#Often, the experimental design allows us only to estimate intervention effects
+	#because the same interventions are not present across all devices.
+	if (length(unique(sp$Device)) == 1){
+		multiple_reg_v = integer(0); #only one device; single regression only.
+	}else {
+    #try to run multiple regression; 
+		multiple_reg_v = tryCatch({ 
+		  ns_multiple_bj(sp,
+				bj_group_column="group",
+				bj_group_2_column="Device",
+				time_column="slow_age",
+				censored_column="Censored",
+				reference_group=ref,debug= F);
+				},error=function(x)return(integer(0)));
+		#if it fails, multiple_reg_v == integer(0) and we will revert to single regression
+	}
+	
+	if (class(multiple_reg_v) == "list"){
+		print(paste("Running multiple reg on",ex))
+		#multiple regression worked; lets process it.
+		cf = ns_rms_contrasts_to_data_frame(multiple_reg_v$group_coefficients,multiple_reg_v$group_coefficients_levels)
+		
+		cf$reference_group = ref;
+		cf$event = "vigorous movement";
+		cf$clock = "forward"
+		cf$reg_type = "multiple"
+		
+		res = ns_multiple_bj(sp,
+				bj_group_column="group",
+				bj_group_2_column="Device",
+				time_column="movement_cessation",
+				censored_column="Censored",
+				reference_group=ref)
+		cf2= ns_rms_contrasts_to_data_frame(res$group_coefficients,res$group_coefficients_levels)
+		cf2$reference_group = ref;
+		cf2$event = "movement cessation";
+		cf2$clock = "forward"
+		cf2$reg_type = "multiple"
+
+		res = ns_multiple_bj(sp,
+				bj_group_column="group",
+				bj_group_2_column="Device",
+				time_column="expansion",
+				censored_column="Censored",
+				reference_group=ref)
+		cf3 = ns_rms_contrasts_to_data_frame(res$group_coefficients,res$group_coefficients_levels)
+		cf3$reference_group = ref;
+		cf3$event = "death";
+		cf3$clock = "forward"
+		cf3$reg_type = "multiple"
+    
+		res = ns_multiple_bj(sp,
+				bj_group_column="group",
+				bj_group_2_column="Device",
+				time_column="after_slow",
+				censored_column="Censored",
+				reference_group=ref)
+		cf4 = ns_rms_contrasts_to_data_frame(res$group_coefficients,res$group_coefficients_levels)
+		cf4$reference_group = ref;
+		cf4$event = "after slow";
+		cf4$clock = "reset"
+		cf4$reg_type = "multiple"
+    
+		res = ns_multiple_bj(sp,
+				bj_group_column="group",
+				bj_group_2_column="Device",
+				time_column="non_moving",
+				censored_column="Censored",
+				reference_group=ref)
+		
+		cf5 = ns_rms_contrasts_to_data_frame(res$group_coefficients,res$group_coefficients_levels)
+		cf5$reference_group = ref;
+		cf5$event = "after movement";
+		cf5$clock = "reset"
+		cf5$reg_type = "multiple"
+
+	}else{
+			print(paste("Running single reg on",ex))
+		res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$group,reference_group=ref)
+		cf = res$coefficients;
+		cf$reference_group = ref;
+		cf$event = "vigorous movement";
+		cf$clock = "forward"
+		cf$reg_type = "single"
+	
+		res = ns_single_bj_group(Surv(sp$movement_cessation,1-sp$Censored)~sp$group,reference_group=ref)
+		cf2= res$coefficients;
+		cf2$reference_group = ref;
+		cf2$event = "movement cessation";
+		cf2$clock = "forward"
+		cf2$reg_type = "single"
+
+		res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$group,reference_group=ref)
+		cf3 = res$coefficients;
+		cf3$reference_group = ref;
+		cf3$event = "death";
+		cf3$clock = "forward"
+		cf3$reg_type = "single"
+		
+		res = ns_single_bj_group(Surv(sp$after_slow,1-sp$Censored)~sp$group,reference_group=ref)
+		cf4= res$coefficients;
+		cf4$reference_group = ref;
+		cf4$event = "after slow";
+		cf4$clock = "reset"
+		cf4$reg_type = "single"
+
+		#browser()
+		res = ns_single_bj_group(Surv(sp$non_moving,1-sp$Censored)~sp$group,reference_group=ref)
+		cf5 = res$coefficients;
+		cf5$reference_group = ref;
+		cf5$event = "after movement";
+		cf5$clock = "reset"
+		cf5$reg_type = "single"
+		#browser()
+	}
+	a= rbind(cf,cf2,cf3,cf4,cf5)
+	a$Experiment = ex;
+	a$type = "single_endpoint";
+	aft_estimates = rbind(a,aft_estimates)
+}
+
+write.csv(aft_estimates,"aft_estimates.csv")
+
+```
+
+```{r,fig.width=15,fig.height=10}
+#Plot AFT plots
+#all_stats = read.csv("aft_estimates.csv")
+all_stats = aft_estimates;
+all_stats$comp_group = all_stats$Experiment;
+all_stats$group = all_stats$bj_group
+
+#movement cessation not measured for tbooh
+all_stats[all_stats$Experiment == "2014_03_18_tbooh_1_5mm_6mm" & all_stats$event == "movement cessation",c("coefficient","upper","lower")] = NA;	
+
+	#plot each intervention on xy axis, x = vigorous movement, and y = some other metric like lifespan
+for (ii in 1:2){
+  if (ii == 1)pdf("aft_reg.pdf",width=5,height=5);
+	#plot_groups = c("AMP100","No AMP100","No AMP100 or Antimycin","all")
+	plot_groups = c("No AMP100")
+	for (subset_to_plot in plot_groups){
+
+			if (subset_to_plot=="No AMP100")
+				cur_stats = all_stats[!(all_stats$comp_group %in% amp100_files),]
+			if (subset_to_plot=="No AMP100 or Antimy
+library(RColorBrewer)cin")
+				cur_stats = all_stats[! (all_stats$comp_group %in% c(amp100_files,"ant_dosage_3","tbooh_1_5mm_6mm")),]
+			if (subset_to_plot=="all")
+				cur_stats = all_stats;
+	#	windows(width=15,height=10)
+	
+		if (ii == 2){	
+		  par(mai = c(.5, .9, .2, .2))
+		  layout( matrix(1:12,nrow=3,byrow=T))
+		}
+		
+		model_prefixes = c("forward","reset","reset2")
+		#model_prefixes = c("Clock Reset")
+		for(model_prefix in model_prefixes){
+			if (model_prefix == "forward"){
+				col_names = c("vigorous movement","movement cessation","death")
+				axis_labels = col_names;# c("vigorous movement cessation", "movement cessation", "death")
+				clock_type="forward";
+			}else if (model_prefix == "reset"){
+				col_names = c("vigorous movement","after slow","after movement")
+				axis_labels = col_names;#c("vigorous movement cessation", "after movement cessation", "after death")
+				clock_type="reset";
+				
+			}else{
+				col_names = c("movement cessation","after movement","after movement")
+				axis_labels = col_names;#c("vigorous movement cessation", "after movement cessation", "after death")
+				clock_type="reset"
+				
+			}
+			#slow age is the same for clock forward and clock reset models
+
+			merged_stats = cur_stats[cur_stats$clock==clock_type   | model_prefix == "reset" & cur_stats$event == "vigorous movement"
+									       | model_prefix == "reset2" & cur_stats$event == "movement cessation",]
+									       
+			#if (model_prefix == "reset2")
+			#	browser()
+			coordinated_change_stats = NULL
+			#get cross terms
+			if (0){
+				p_vals = merged_stats[intersect(grep("vs",merged_stats$group),grep("vs",merged_stats$event)),]
+				
+				p_val_1 =  "p"
+				p_val_2 =  "p"
+			}
+
+			#stats = stats[stats$N_mut > 70 & stats$N_control > 70,]
+			stats = merged_stats[merged_stats$type == "single_endpoint",]
+
+			stats$coefficient = exp(stats$coefficient)
+			stats$lower = exp(stats$lower)
+			stats$upper = exp(stats$upper)
+
+			s1 = stats[stats$event==col_names[[1]],]
+			s2 = stats[stats$event==col_names[[2]],]
+			s3 = stats[stats$event==col_names[[3]],]
+			s12 = merge(s1,s2,by="group",suffixes=c(paste0(".",col_names[[1]]),paste0(".",col_names[[2]])))
+			s123 = merge(s3,s12,by="group")
+			for (cl in c("coefficient","se","lower","upper","p"))
+				names(s123)[names(s123)==cl] = paste0(cl,".",col_names[[3]])
+			#s123_p1 = merge(s123,p_val_1,by="group")
+			#s123_p12 = merge(s123_p1,p_val_2,by="group",suffixes=c(paste0("_cross.",col_names[[2]]),paste0("_cross.",col_names[[3]])))
+			split_stats = s123;
+
+			#prep for regression across conditions
+			if (model_prefix == "forward"){	#set the colors and shapes in the first iteration and use the same ones for all other iterations
+				conditions = unique(split_stats$group[split_stats[,paste0("coefficient.",col_names[[1]])]!=1]);
+				N= length(conditions)
+				colors = rep(brewer.pal(N,"Paired"),2)[1:N];
+				all_pch = c(21:25,21:25,21:25,21:25)
+				pch = all_pch[1:N]
+	
+			}
+			coeff_n=c(paste0("coefficient.",col_names[[1]]),paste0("coefficient.",col_names[[2]]),paste0("coefficient.",col_names[[3]]))
+			upper_n=c(paste0("upper.",col_names[[1]]),paste0("upper.",col_names[[2]]),paste0("upper.",col_names[[3]]))
+			lower_n=c(paste0("lower.",col_names[[1]]),paste0("lower.",col_names[[2]]),paste0("lower.",col_names[[3]]))
+			cross_p=c(paste0("p_cross.",col_names[[2]]),paste0("p_cross.",col_names[[3]]))
+			#axis_labels = c("Strong->Weak \nTransition Scale Factor","Weak -> Non-moving\nTransition Scale Factor","Non-moving->Dead\nTransition Scale Factor")
+
+			conditions_this_round = unique(split_stats$group[split_stats[,paste0("coefficient.",col_names[[1]])]!=1]);
+			N_this_round = length(conditions_this_round)
+			comparrisions_to_make = list();
+			comparrisions_to_make[[1]] = c(1,2)
+			comparrisions_to_make[[2]] = c(1,3)
+			comparrisions_to_make[[3]] = c(2,3)
+			
+			for (cc in 1:3){
+				c1 = comparrisions_to_make[[cc]][1]
+				c2 = comparrisions_to_make[[cc]][2]
+				x_l = split_stats[,c(upper_n[c1],lower_n[c1])]
+				y_l = split_stats[,c(upper_n[c2],lower_n[c2])]
+				x_lim = x_l[!is.na(x_l) & !is.na(y_l)]
+				x_lim = range(x_lim);
+				
+				y_lim = y_l[!is.na(x_l) & !is.na(y_l)]
+				y_lim = range(y_lim);
+
+				plot(c(),c(),type="n",xlab=axis_labels[c1],ylab=axis_labels[c2],log="xy",xlim=x_lim,ylim=y_lim)#,xaxt='n',yaxt='n')
+				abline(h=1,col="gray",lty=2)
+				abline(v=1,col="gray",lty=2)
+				abline(b=1,a=0,col="gray",lty=2)
+				if (0){
+					axis(1,1:7)
+					rug(side=1,x=1:8-.5,ticksize=-.015)
+					if (as.numeric(max(haz.w_n_lim)>4)){
+						axis(2,2^seq(-2,8,2),las=1)
+						rug(side=2,x=2^c(-3:8),ticksize=-.015)
+					}else{
+						axis(2,2^seq(-2,8,1),las=1)
+						rug(side=2,x=2^seq(-3,8,.5),ticksize=-.015)
+					}
+				}
+				#print(split_stats[,coeff_n[c1]])
+						
+				for(j in 1:N_this_round){	
+	
+						i = which(split_stats$group == conditions_this_round[j])
+						if (length(i) == 0)
+							next
+						if (is.na(split_stats[i,coeff_n[c1]]) || split_stats[i,coeff_n[c1]] == 1)
+							next;
+						condition_lookup_id = which(conditions_this_round[j] == conditions)
+						#browser()
+						col = colors[condition_lookup_id]
+						edge_col = "black"
+						pc = pch[condition_lookup_id]
+
+						cex = 2
+						#if (split_stats[i,cross_p[c2-1]]<.05) edge_col = "#444444"
+						points(split_stats[i,coeff_n[c1]],split_stats[i,coeff_n[c2]],col=edge_col,bg=col,pch=pc,cex=cex)
+						#browser()
+	
+						lines(rep(split_stats[i,coeff_n[c1]],2),c(split_stats[i,lower_n[c2]],split_stats[i,upper_n[c2]]),col="black")
+						lines(c(split_stats[i,lower_n[c1]],split_stats[i,upper_n[c1]]),rep(split_stats[i,coeff_n[c2]],2),col="black")
+
+						print(paste(i,split_stats$group[i]));
+						#if ( split_stats[i,cross_p[c2-1]]<.05){
+							#points(split_stats[i,lower_n[c1]],split_stats[i,coeff_n[c2]],pch=19,col="#FF0000",bg="#111111",cex=.5)
+							#points(split_stats[i,upper_n[c1]],split_stats[i,coeff_n[c2]],pch=19,col="#FF0000",bg="#111111",cex=.5)
+							#points(split_stats[i,coeff_n[c1]],split_stats[i,lower_n[c2]],pch=19,col="#FF0000",bg="#111111",cex=.5)
+							#points(split_stats[i,coeff_n[c1]],split_stats[i,coeff_n[c2]],pch=21,bg="#FFFFFF",col="#111111",cex=1)
+						#}
+					}
+
+				if (0){
+					fit = glm2(haz.r.w_n~log_aft_scalefactor,data=stats,family=quasipoisson(link="log"))
+					x = seq(aft_lim[1],aft_lim[2],length.out=100);
+					pr = predict(fit,newdata=data.frame(log_aft_scalefactor=log(x)), se.fit=TRUE)
+					polygon(c(x,rev(x)),c(exp(pr$fit+pr$se.fit),rev(exp(pr$fit-pr$se.fit))),col=rgb(.5,.5,.5,.25),border=NA)
+					lines(x,exp(pr$fit))
+					slow_w_n = as.data.frame(confint(fit))
+					slow_w_n$val=coefficients(fit)
+					slow_w_n$pval = summary(fit)$coefficients[,"Pr(>|t|)"]
+					slow_w_n$grp="weak->non-moving.vs.slow->weak"
+				}
+			}
+			if (0){
+			w_n_nd = as.data.frame(confint(fit))
+			w_n_nd$val=coefficients(fit)
+			w_n_nd$pval = summary(fit)$coefficients[,"Pr(>|t|)"]
+			w_n_nd$grp="non-moving->dead.vs.weak->non-moving"
+
+			tmp = rbind(slow_n_d,slow_w_n,w_n_nd);
+			tmp$comp_group=subset_to_plot
+			tmp$model_type = model_prefix;
+			coordinated_change_stats=rbind(tmp,coordinated_change_stats);
+			}
+			plot(c(),c(),xlim=c(0,1),ylim=c(0,1),type="n")
+			legend("center",title=paste(model_prefix,subset_to_plot),legend=conditions,pch=pch,col=colors,pt.bg=colors,bty="n")
+
+		}
+	}
+if (ii == 1) dev.off();
+}
+```
+
+
+```{r}
+#write stats to pretty table
+stats = all_stats[!all_stats$comp_group %in% amp100_files,]
+stats_to_print = subset(stats,!is.na(stats$p) & stats$event %in% c("vigorous movement","death","after slow"))
+stats_to_print$coefficient = round(exp(stats_to_print$coefficient),3)
+stats_to_print$upper = round(exp(stats_to_print$upper),3)
+stats_to_print$lower = round(exp(stats_to_print$lower),3)
+stats_to_print$ci = apply(stats_to_print,1,FUN=function(x)paste0("(",x[["lower"]],",",x[["upper"]],")"))
+
+pr = function(x){
+	#return(paste (x,x <= 10^-10));
+	if (x < 10^-10){
+		return("<1e-10");
+	}else return(formatC(x, format = "e", digits = 1))
+}
+stats_to_print$p_nice = apply(stats_to_print,1,FUN=function(x)pr(as.numeric(x[["p"]])));
+stats_to_print = stats_to_print[,c("bj_group","event","coefficient","ci","p_nice")]
+sv = stats_to_print[stats_to_print$event == "vigorous movement",]
+sr = stats_to_print[stats_to_print$event == "after slow",]
+sd = stats_to_print[stats_to_print$event == "death",]
+s1 = merge(sv,sr,by="bj_group",suffixes=c("VMC","Remaining lifespan after VMC"))
+s2 = merge(x=s1,y=sd,by="bj_group",suffixes=c("BBB","Lifespan"))
+
+s2 = s2[order(s2$coefficientVMC,s2$coefficient,s2[,"coefficientRemaining lifespan after VMC"],decreasing=T),]
+write.csv(s2,"intervention_aft_results_formatted.csv")
+```
+
+
+```{r}
+
+#fit and plot weibul distributions
+ min_mllogis_theta <<- .00001;
+  dir.create("parametric_fits")
+	param_data = NULL;
+	for (ex in unique(spans$Experiment)){
+		spp = spans[spans$Experiment == ex,];
+		for (group in unique(spp$group)){
+			
+			sp = spp[spp$group == group,]
+			plo = 1;# sp$control[1] ==1
+			#calc difference
+			sp$d = sp$expansion - sp$slow_age;
+			sp$d[sp$d<=0] = min(sp$d[sp$d>0])	#can't handle zeros
+			sp$d[sp$Censored] = sp$expansion[sp$Censored];
+			if (length(unique(sp$slow_age)) < 100) next;
+
+
+			sp$slow_age[sp$slow_age<=0] = min(sp$slow_age[sp$slow_age>0])	#can't handle zeros
+			sp$expansion[sp$expansion<=0] = min(sp$expansion[sp$expansion>0])	#can't handle zeros
+			
+			if (length(unique(sp$Device))>1){
+				#aft regression for vigorous movement
+				#res = ns_single_bj_group(Surv(sp$slow_age,1-sp$Censored)~sp$Device);
+				res_m = ns_multiple_bj(sp,bj_group_column="group",bj_group_2_column="Plate.Name",time_column = "slow_age",reference_group=sp$group[sp$control==1][1]);
+				sp$slow_age = res_m[["bj_corrected_death_time"]]
+				
+				#browser()
+				#aft regression for death
+				#res = ns_single_bj_group(Surv(sp$expansion,1-sp$Censored)~sp$Device);
+				res_m = ns_multiple_bj(sp,bj_group_column="group",bj_group_2_column="Plate.Name",time_column = "expansion",reference_group=sp$group[sp$control==1][1]);
+				sp$expansion = res_m[["bj_corrected_death_time"]]
+			}
+			
+			parametric_fits=c("inverse_gaussian","weibull_gamma_frailty","weibull","gompertz","gompertz_gamma_frailty")
+
+
+			f = ns_fit_parameterization(sp,parametric_fits=parametric_fits,death_column="slow_age",censored_column="Censored");
+
+			rn = range(sp$expansion)
+			newx = seq(rn[1],rn[2],.1);
+			param_surv = ns_get_parametric_survival(newx,f$fits,"inverse_gaussian");
+			
+			srv = Surv(sp$slow_age,1-sp$Censored);
+			if (plo){
+		  	print(ex)
+			  pdf(paste0("parametric_fits/",ex,"=",group,"=vmc_and_death_param_fit.pdf"),width=7,height=7)
+				plot(survfit(srv~1),xlim=c(0,rn[2]),conf.int=F)
+				lines(newx,param_surv,col="red");
+				if ("weibull_gamma_frailty" %in% f$successful_fits){
+					param_surv_gw = ns_get_parametric_survival(newx,f$fits,"weibull_gamma_frailty");
+					lines(newx,param_surv_gw,col="green");
+				}
+				legend("topright",bty="n",title=ex,legend=".")
+			}
+
+			f2 = ns_fit_parameterization(sp,parametric_fits=parametric_fits,death_column="expansion",censored_column="Censored");
+			param_surv = ns_get_parametric_survival(newx,f2$fits,"inverse_gaussian");
+			param_surv_gw = ns_get_parametric_survival(newx,f2$fits,"weibull_gamma_frailty");
+			param_surv_gomp = ns_get_parametric_survival(newx,f2$fits,"gompertz");
+			srv = Surv(sp$expansion,1-sp$Censored);
+			if (plo){
+				lines(survfit(srv~1),col="black",conf.int=F,lty=2)
+				lines(newx,param_surv,col="red",lty=2);
+				lines(newx,param_surv_gw,col="green",lty=2);
+				lines(newx,param_surv_gomp,col="brown",lty=2);
+				dev.off()
+			}
+
+
+
+			f3 = ns_fit_parameterization(sp,parametric_fits,death_column="d",censored_column="Censored");
+
+			rn = range(sp$d,50)
+			newx = seq(rn[1],rn[2],.1);
+			param_surv = ns_get_parametric_survival(newx,f3$fits,"inverse_gaussian");
+			param_surv_w = ns_get_parametric_survival(newx,f3$fits,"weibull");
+			param_surv_wf = ns_get_parametric_survival(newx,f3$fits,"weibull_gamma_frailty");
+			param_surv_g = ns_get_parametric_survival(newx,f3$fits,"gompertz");
+			param_surv_gg = ns_get_parametric_survival(newx,f3$fits,"gompertz_gamma_frailty");
+			srv = Surv(sp$d,1-sp$Censored);
+			if (plo){
+			  pdf(paste0("parametric_fits/",ex,"=",group,"=vmc_death_clock_set-param_fit.pdf"),width=7,height=7)
+				plot(survfit(srv~1),log='x',xlim=c(rn[1],40),conf.int=F)
+				lines(newx,param_surv,col="red");
+				lines(newx,param_surv_w,col="blue");
+				lines(newx,param_surv_wf,col="pink");
+				lines(newx,param_surv_g,col="green");
+				lines(newx,param_surv_gg,col="brown");
+				dev.off()
+			}
+
+			inverse_gaussian_columns = c("inverse_gaussian_mu","inverse_gaussian_mu_95_conf_l","inverse_gaussian_mu_95_conf_h","inverse_gaussian_sigma2","inverse_gaussian_sigma_95_conf_l","inverse_gaussian_sigma_95_conf_h","inverse_gaussian_AIC")
+			weibul_frailty_columns = c("weibull_gamma_frailty_scale","weibull_gamma_frailty_scale_95_conf_l","weibull_gamma_frailty_scale_95_conf_h","weibull_gamma_frailty_shape","weibull_gamma_frailty_shape_95_conf_l","weibull_gamma_frailty_shape_95_conf_h","weibull_gamma_frailty_theta","weibull_gamma_frailty_theta_95_conf_l","weibull_gamma_frailty_theta_95_conf_h","weibull_gamma_frailty_AIC")
+			weibul_columns = c("weibull_scale","weibull_scale_95_conf_l","weibull_scale_95_conf_h","weibull_shape","weibull_shape_95_conf_l","weibull_shape_95_conf_h","weibull_AIC")
+			gompertz_columns = c("gompertz_shape","gompertz_shape_95_conf_l","gompertz_shape_95_conf_h","gompertz_rate","gompertz_rate_95_conf_l","gompertz_rate_95_conf_h","gompertz_AIC");
+			gompertz_frailty_columns = c("gompertz_gamma_frailty_shape","gompertz_gamma_frailty_shape_95_conf_l","gompertz_gamma_frailty_shape_95_conf_h",
+			                             "gompertz_gamma_frailty_rate","gompertz_gamma_frailty_rate_95_conf_l","gompertz_gamma_frailty_rate_95_conf_h",
+			                              "gompertz_gamma_frailty_theta","gompertz_gamma_frailty_theta_95_conf_l","gompertz_gamma_frailty_theta_95_conf_h","gompertz_gamma_frailty_AIC");
+			all_columns = c(inverse_gaussian_columns,weibul_frailty_columns,weibul_columns,gompertz_columns,gompertz_frailty_columns);
+			
+			f1d = f$fits[,inverse_gaussian_columns]
+			f1dd =cbind(ns_invguass_boundary_parameters(mu=f1d$inverse_gaussian_mu,sigma2 = f1d$inverse_gaussian_sigma2 , drift_rate = 1),f$fits[,all_columns]);
+			f1dd$stage = "slow_age"
+
+			f2d = f2$fits[,inverse_gaussian_columns]
+			f2dd =cbind(ns_invguass_boundary_parameters(mu=f2d$inverse_gaussian_mu,sigma2 = f2d$inverse_gaussian_sigma2, drift_rate = 1),f2$fits[,all_columns]);
+			f2dd$stage = "expansion";
+
+			f3d = f3$fits[,inverse_gaussian_columns]
+			f3dd =cbind(ns_invguass_boundary_parameters(mu=f3d$inverse_gaussian_mu,sigma2 = f3d$inverse_gaussian_sigma2, drift_rate = 1),f3$fits[,all_columns]);
+			f3dd$stage = "diff";
+
+			ffdd = rbind(f1dd,f2dd,f3dd)
+			ffdd$experiment = ex;
+			ffdd$group = group
+			ffdd$control = sp$control[1]
+			ffdd$food = sp$food[1];
+			ffdd$temperature = sp$temperature[1];
+			param_data = rbind(ffdd,param_data);
+		}
+	}
+	write.csv(param_data,"parametric_fits.csv")
+
+	
+```
+```{r}
+#plot relationship among parameters of parametric fits
+if (1){
+	
+ns_get_vals = function(stage,model,param_data){
+	lower_n=paste0(model,"_95_conf_l")
+	upper_n=paste0(model,"_95_conf_h")
+	
+	return(list(v=param_data[param_data$stage==stage,model],
+		    l=param_data[param_data$stage==stage,lower_n],
+		    u=param_data[param_data$stage==stage,upper_n]));
+}
+	ns_plot_vals = function(x_stage,x_param,y_stage,y_param,xlab,ylab,param_data){
+	
+		x = ns_get_vals(x_stage,x_param,param_data);
+		xrng = range(x);
+		if (diff(xrng) > 100) xrng=range(x$v)
+		xrng[1] = 0;
+		xrng[2]=xrng[2]*1.05;
+		y = ns_get_vals(y_stage,y_param,param_data);
+		yrng = range(y);
+		if (diff(yrng) > 100) yrng=range(y$v)
+		yrng[1] = 0;
+		yrng[2]=yrng[2]*1.05;
+		
+		xrng = yrng = range(xrng,yrng)
+		plot(c(),c(),type="n",xlim=xrng,ylim=yrng,xlab=xlab,ylab=ylab);
+		for (i in 1:length(x$v)){
+			lines(rep(x$v[i],2),c(y$l[i],y$u[i]),col="gray")
+			lines(c(x$u[i],x$l[i]),rep(y$v[i],2),col="gray")
+		}
+		points(x$v,y$v,pch=21,bg="black")
+		d = data.frame(x=x$v,y=y$v);
+		lmm = loess(y~x,d,span=1.5);
+		newx = seq(xrng[1],xrng[2],.1)
+		lines(newx,predict(lmm,newdata=data.frame(x=newx)),col="red")
+		abline(b=1,a=0,lty=2,col="gray")
+	}
+	param_data = param_data[order(param_data$experiment,param_data$group,param_data$stage),]
+	
+	param_data$best_weibull_scale = 		param_data$weibull_gamma_frailty_scale
+	param_data$best_weibull_scale_95_conf_l =	param_data$weibull_gamma_frailty_scale_95_conf_l
+	param_data$best_weibull_scale_95_conf_h =	param_data$weibull_gamma_frailty_scale_95_conf_h
+	param_data$best_weibull_shape = 		param_data$weibull_gamma_frailty_shape	
+	param_data$best_weibull_shape_95_conf_l =	param_data$weibull_gamma_frailty_shape_95_conf_l
+	param_data$best_weibull_shape_95_conf_h =	param_data$weibull_gamma_frailty_shape_95_conf_h
+	param_data$best_weibull_theta = 		param_data$weibull_gamma_frailty_theta
+	param_data$best_weibull_theta_95_conf_l =	param_data$weibull_gamma_frailty_theta_95_conf_l
+	param_data$best_weibull_theta_95_conf_h =	param_data$weibull_gamma_frailty_theta_95_conf_h
+	
+	
+	no_frailty =( param_data$weibull_AIC < param_data$weibull_gamma_frailty_AIC | param_data$weibull_gamma_frailty_theta_95_conf_l <= 0 )& !is.na(param_data$weibull_gamma_frailty_AIC)
+	
+	
+	param_data$best_weibull_scale[no_frailty ] 		= param_data$weibull_scale[no_frailty] 
+	param_data$best_weibull_scale_95_conf_l[no_frailty] 	= param_data$weibull_scale_95_conf_l[no_frailty] 
+	param_data$best_weibull_scale_95_conf_h[no_frailty] 	= param_data$weibull_scale_95_conf_h[no_frailty] 
+	param_data$best_weibull_shape[no_frailty] 		= param_data$weibull_shape	[no_frailty] 
+	param_data$best_weibull_shape_95_conf_l[no_frailty] 	= param_data$weibull_shape_95_conf_l[no_frailty] 
+	param_data$best_weibull_shape_95_conf_h[no_frailty] 	= param_data$weibull_shape_95_conf_h[no_frailty] 
+	param_data$best_weibull_theta[no_frailty] 		= 0
+	param_data$best_weibull_theta_95_conf_l[no_frailty] 	= 0
+	param_data$best_weibull_theta_95_conf_h[no_frailty] 	= 0
+		
+	data_no_antimycin = param_data[param_data$experiment != "ant_dosage_3" | param_data$control == 1,]
+	layout(matrix(1:8,nrow=4))
+	par(mai=c(.7,.7,.05,.05))
+	
+
+	
+	
+	#m = param_data[,c("experiment","group","weibull_gamma_frailty_theta")]
+	#m = m[order(m$weibull_gamma_frailty_theta),]
+	
+	ns_plot_vals("slow_age","best_weibull_scale",
+		     "expansion","best_weibull_scale",
+			xlab = "Vigorous Movement Scale",
+			ylab = "Death Scale",
+			data_no_antimycin)
+			
+	ns_plot_vals("slow_age","best_weibull_theta",
+			     "expansion","best_weibull_theta",
+				xlab = "Vigorous Movement Frailty",
+				ylab = "Death Frailty",
+				data_no_antimycin)
+				
+	ns_plot_vals("slow_age","best_weibull_theta",
+		     "diff","best_weibull_theta",
+			xlab = "Vigorous Movement Frailty",
+			ylab = "Diff Frailty",
+			data_no_antimycin)
+			
+	ns_plot_vals("slow_age","best_weibull_shape",
+			     "expansion","best_weibull_shape",
+				xlab = "Vigorous Movement Shape",
+				ylab = "Death Shape",
+			data_no_antimycin)
+			
+	ns_plot_vals("slow_age","best_weibull_shape",
+			     "diff","best_weibull_shape",
+				xlab = "Vigorous Movement Shape",
+				ylab = "Diff Shape",
+		data_no_antimycin)
+		
+	ns_plot_vals("slow_age","best_weibull_scale",
+			     "slow_age","best_weibull_shape",
+				xlab = "Vigorous Movement Scale",
+				ylab = "Vigorous Movement Shape",
+		data_no_antimycin)
+		
+	ns_plot_vals("expansion","best_weibull_scale",
+				     "expansion","best_weibull_shape",
+					xlab = "Death Scale",
+					ylab = "Death Shape",
+	data_no_antimycin)
+	ns_plot_vals("diff","best_weibull_scale",
+				     "diff","best_weibull_shape",
+					xlab = "Diff Scale",
+					ylab = "Diff Shape",
+		data_no_antimycin)
+		stop()
+}
+
+```
+
+```{r,fig.width=10,fig.height=5}
+data = read.csv("../data/glm_all_results=big_run2.csv");
+metadata = read.csv("../data/control_metadata.csv")
+data = merge(data,metadata[,!(names(metadata) %in% c("food","temperature","X"))],by=c("Experiment","group"))
+data = data[!data$Experiment %in% amp100_files,]
+
+
+experiments = unique(data$Experiment);
+groups = unique(data[,c("Experiment","group")]);
+
+for (j in 1:2){
+   if(j==1){
+     pdf("alpha_estimates_by_group.pdf",width=10,height=5)
+     graph_width = 10;
+    ex_spacing = 2
+  }else{ 
+    graph_width = 10;
+    ex_spacing = 2
+  }
+  
+  colors = sample(rainbow(length(experiments)),length(experiments))
+  N_ticks = dim(groups)[1] + ex_spacing*length(experiments)	#tick for each group plus one extra between experiments
+  #layout(matrix(1:2,ncol=2))
+  g_step = graph_width/N_ticks;
+  star_y = max(data$val_ui)
+  ylim= range(data$val_li,data$val_ui,star_y);
+  xlim = c(-g_step,graph_width)
+
+ 
+  plot(c(),c(),type="n",xlim=xlim,ylim=ylim,xaxt='n',xlab=NA,ylab="alpha");
+  abline(h=1,lty=2,col="dark gray")
+  g_total= 0;
+  stage = "vigorous_vs_death"
+  group_labels = NULL
+  label_pos = NULL
+  for (ex in experiments){
+  	ex_i = which(ex==experiments)
+  	dat = data[data$Experiment == ex & data$stage == stage,]
+  	groups = unique(dat[,c("group","control")])
+  	groups = groups[order(groups$control,decreasing=T),]
+  	for (g_i in 1:(dim(groups)[1])){
+  		d = dat[dat$group == groups$group[g_i],]
+  		x = (g_total)*g_step
+  		lines(c(x,x),c(d$val_li,d$val_ui))
+  		points(x,d$val,pch=21,bg=colors[which(ex==experiments)],col="black");
+  		if (d$diff_p < .05)
+  			text(x,d$val_ui+.05,"*")
+  		print(c(g_total),d$val)
+  		g_total = g_total + 1;
+  	
+  		group_labels = rbind(groups$group[g_i],group_labels);
+  		label_pos = rbind(x,label_pos)
+  	}
+  	g_total = g_total + ex_spacing;
+  }
+  axis(1,at=label_pos,labels=group_labels,las=2)
+  
+  if(j==1){
+    dev.off();
+      pdf("alpha_estimates_wildtype_by_environment.pdf",width=10,height=5)
+  }
+  xlim = c(-.5,2.5);
+  plot(c(),c(),type="n",xlim=xlim,ylim=ylim,xaxt='n',xlab=NA,ylab="alpha");
+  abline(h=1,lty=2,col="dark gray")
+  for (ex in experiments){
+  	ex_i = which(ex==experiments)
+  	dat = data[data$Experiment == ex & data$stage == stage & data$control == 1,]
+  	groups = unique(dat[,c("group","control")])
+  	groups = groups[order(groups$control,decreasing=T),]
+  	for (g_i in 1:(dim(groups)[1])){
+  		d = dat[dat$group == groups$group[g_i],]
+  		x = (d$food != "UV")*.5 + runif(n=1,min=-.1,max=.1)
+  		if (d$diff_p < .05)
+  			text(x,d$val_ui+.05,"*")
+  		lines(c(x,x),c(d$val_li,d$val_ui))
+  		points(x,d$val,pch=21,bg=colors[which(ex==experiments)],col="black");
+  		print(c(g_total),d$val)
+  		g_total = g_total + 1;
+  	
+  	}
+  	g_total = g_total + ex_spacing;
+  }
+  for (ex in experiments){
+  	ex_i = which(ex==experiments)
+  	dat = data[data$Experiment == ex & data$stage == stage & data$control == 1,]
+  	groups = unique(dat[,c("group","control")])
+  	groups = groups[order(groups$control,decreasing=T),]
+  	for (g_i in 1:(dim(groups)[1])){
+  		d = dat[dat$group == groups$group[g_i],]
+  		x = 1.5+(d$temperature == 25)*.5+ runif(n=1,min=-.1,max=.1)
+  		if (d$diff_p < .05)
+  			text(x,d$val_ui+.05,"*")
+  		lines(c(x,x),c(d$val_li,d$val_ui))
+  		points(x,d$val,pch=21,bg=colors[which(ex==experiments)],col="black");
+  		print(c(g_total),d$val)
+  		g_total = g_total + 1;
+  	
+  	}
+  	g_total = g_total + ex_spacing;
+  }
+  axis(1,at=c(0,.5,1.5,2),labels=c("UV-inactivated","Live","20C","25C"),las=2)
+  if(j==1) dev.off();
+}
+```
+
+
+
+```{r}
+source("../shared_scripts/ns_estimate_dS_and_dR.r")
+#Estimate d mu S and dRf parameters drift diffusion proportionate / disproportionate model.  see supplementary note 5 for details
+experiments_to_plot = experiments[!experiments %in% c("CA1200_AMP100_dosage","AMP100_Dosage_Series")]
+results = NULL;
+for (ex in experiments_to_plot){
+	sp = subset(spans,spans$Experiment == ex  & spans$expansion != 0 & spans$slow_age != 0);
+	
+	sp$group = factor(sp$group)
+	groups = unique(sp$group)
+  if (length(groups)<2) next;
+	ref = sp$group[sp$control==1][1];
+	
+  result = ns_estimate_dS_and_dR(sp,device_column=NULL,ref_group = ref);
+  result$coefficients$experiment = ex;
+	results = rbind(result$coefficients,results)
+}
+
+```
+
+```{r}
+#Plot the results ofd mu S and dRf fits
+res1 = results[results$var=="dS",]
+res2 = results[results$var=="dR",]
+res = merge(res1,res2,by=c("experiment","group"),suffixes=c("_dS","_dR"))
+
+conditions = unique(res$group);
+N= length(conditions)
+colors = rep(brewer.pal(N,"Paired"),2)[1:N];
+names(colors) = conditions
+all_pch = c(21:25,21:25,21:25,21:25)
+pch = all_pch[1:N]
+names(all_pch) = conditions
+edge_col = "black"
+	cex = 2
+	mt = match(res$group,conditions)
+for (j in 1:2){
+  if(j==2)pdf("dR_dS.pdf",width=7,height=7)
+  plot(exp(res$coefficient_dS),exp(res$coefficient_dR),col=edge_col,bg=colors[mt],pch=pch[mt],ylim=c(.5,25)cex=cex,log="xy",xlab="Delta Shared",ylab="Delta Separate")
+  for (i in 1:N){
+    lines(exp(c(res$lower_dS[i],res$upper_dS[i])),exp(rep(res$coefficient_dR[i],2)))
+    lines(exp(rep(res$coefficient_dS[i],2)),exp(c(res$lower_dR[i],res$upper_dR[i])))
+    if (abs(res$coefficient_dR[i])>log(1.25)) text(exp(res$coefficient_dS[i]+.4),exp(res$coefficient_dR[i]),res$group[i])
+  }
+  legend("topright",legend=conditions,pch=pch,col=colors,pt.bg=colors,bty="n",lty=2)
+  abline(h=1)
+  if (j==2)dev.off();
+}
+
+```
+
