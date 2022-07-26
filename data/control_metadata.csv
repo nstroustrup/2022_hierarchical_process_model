@@ -1,0 +1,53 @@
+Experiment,group,control,food,temperature
+tbooh_1_5mm_6mm,wildtype OP50 25C,1,Live,25
+tbooh_1_5mm_6mm,6,0,Live,20
+tbooh_1_5mm_6mm,3,0,Live,20
+tbooh_1_5mm_6mm,1.5,0,Live,20
+eat2_wt_20c=2,Live,0,Live,20
+eat2_wt_20c=2,UV-Inactivated,1,UV,20
+eat2_wt_20c,QZ0,1,Live,20
+eat2_wt_20c,QZ414,0,Live,20
+adl_hr1,wildtype Live 25C,1,HT115,25
+AMP100_Dosage_Series,0.187mM,0,UV,20
+AMP100_Dosage_Series,4mM,0,UV,20
+AMP100_Dosage_Series,1mM,0,UV,20
+AMP100_Dosage_Series,0.375mM,0,UV,20
+AMP100_Dosage_Series,0.125mM,0,UV,20
+AMP100_Dosage_Series,0.015mM,0,UV,20
+AMP100_Dosage_Series,0.04mM,0,UV,20
+AMP100_Dosage_Series,0.031mM,0,UV,20
+AMP100_Dosage_Series,wildtype UV-inactivated 20C,1,UV,20
+AMP100_Dosage_Series,0.062mM,0,UV,20
+AMP100_Dosage_Series,2mM,0,UV,20
+AMP100_Dosage_Series,8mM,0,UV,20
+AMP100_Dosage_Series,0.5mM,0,UV,20
+AMP100_Dosage_Series,0.003mM,0,UV,20
+four_temp_scaling,wildtype UV-inactivated 25,0,UV,25
+four_temp_scaling,wildtype UV-inactivated 20,1,UV,20
+nuo6_hif1_21_to_27C,MQ1333,0,UV,20
+nuo6_hif1_21_to_27C,wildtype UV-Inactivated 21-25C,1,UV,20
+stirred_lifespan,wildtype OP50 25C,1,Live,25
+stirred_lifespan,HT1593,0,Live,25
+ant_dosage_3,0.009283,0,UV,20
+ant_dosage_3,wildtype UV-inactivated 20C,1,UV,20
+ant_dosage_3,0.004309,0,UV,20
+ant_dosage_3,0.005565,0,UV,20
+daf2_age1_25C,wildtype live 25,1,Live,25
+daf2_age1_25C,QZ120,0,Live,25
+wt_glp1_arrest_lifespan,glp-1 Fed,0,Live,20
+wt_glp1_arrest_lifespan,wildtype 25C,1,Live,20
+eat2,eat-2 Fed,0,Live,20
+eat2,wildtype OP50 25C Starved,0,None,20
+eat2,wildtype OP50 25C Fed,1,Live,20
+CA1200_AMP100_dosage,CA1200 0 uM,1,UV,20
+CA1200_AMP100_dosage,AMP100 500 uM,0,UV,20
+CA1200_AMP100_dosage,AMP100 0 uM,0,UV,20
+CA1200_AMP100_dosage,CA1200 500 uM,0,UV,20
+CA1200_AMP100_dosage,CA1200 62 uM,0,UV,20
+CA1200_AMP100_dosage,CA1200 2000 uM,0,UV,20
+CA1200_AMP100_dosage,AMP100 2000 uM,0,UV,20
+CA1200_AMP100_dosage,AMP100 62 uM,0,UV,20
+CA1200_AMP100_dosage,CA1200 8000 uM,0,UV,20
+CA1200_AMP100_dosage,AMP100 8000 uM,0,UV,20
+CA1200_AMP100_dosage,CA1200 125 uM,0,UV,20
+CA1200_AMP100_dosage,AMP100 125 uM,0,UV,20
